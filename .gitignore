@@ -1,0 +1,73 @@
+# ==== 后端（Go）====
+
+# 编译产物。分发方式是一个 CGO_ENABLED=0 的静态二进制，不进版本库。
+server
+mediacenter
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# ==== 客户端（Flutter / Dart）====
+
+# 构建与缓存。这两项在本机会占到 ~2GB，但都是可重新生成的产物。
+build/
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+coverage/
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.atom/
+.history/
+*.swp
+*.class
+
+# macOS
+.DS_Store
+xcuserdata/
+macos/Pods/
+macos/Flutter/ephemeral/
+ios/Pods/
+
+# Android 构建产物
+android/app/debug/
+android/app/profile/
+android/app/release/
+android/.gradle/
+android/local.properties
+
+# 符号化 / 混淆产物
+app.*.symbols
+app.*.map.json
+
+# ==== 运行期数据（绝不该进版本库）====
+
+# 这些是用户的实际媒体索引和缓存，和源代码无关，且会无界增长。
+data/
+**/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+thumbs/
+thumbnails/
+
+# 日志
+*.log
+
+# ==== Python（仅开发工具偶用） ====
+__pycache__/
+*.pyc
+.venv/
+venv/

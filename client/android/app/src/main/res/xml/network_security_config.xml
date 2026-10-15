@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 9 起默认禁止明文 HTTP。本应用的整个设计前提就是「局域网内直连、
+  不走云端」，服务端地址由用户自行填写（可能是任意内网 IP），因此无法用
+  域名白名单精确限制，只能整体放开明文流量。
+
+  这是有意识的权衡：流量不出局域网，且所有接口都要求访问令牌。若将来支持
+  公网访问，应改为仅允许特定域名并强制 HTTPS。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

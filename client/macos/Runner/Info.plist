@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconFile</key>
+	<string></string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>$(PRODUCT_COPYRIGHT)</string>
+	<!--
+	  客户端用组播（mDNS）自动发现局域网内的服务端，属于「访问本地网络」，
+	  macOS 15 起要求应用声明用途，否则系统不会弹授权框，访问被直接拒绝，
+	  表现为「明明在广播却一个响应都收不到」。
+
+	  这里用原始 socket 收发组播，不走 Bonjour API，所以不需要 NSBonjourServices
+	  （那个键是给 NSNetServiceBrowser / NSNetService 用的）。若将来改用 Bonjour，
+	  必须同时补上它，并列出 _mediacenter._tcp。
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于在局域网内自动发现你运行的媒体中心服务端，避免手动输入地址。</string>
+	<key>NSMainNibFile</key>
+	<string>MainMenu</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>

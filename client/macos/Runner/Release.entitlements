@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!--
+	  自动发现需要往组播组 224.0.0.251:5353 发查询、并接收响应，也就是要
+	  bind 5353 收数据报。沙箱里「接收」属于监听行为，只有 network.client
+	  是不够的——少了这一条，Release 构建下发现会静默失败，而 Debug 因为
+	  关了沙箱看不出来。
+	-->
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

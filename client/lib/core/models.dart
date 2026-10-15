@@ -1,0 +1,281 @@
+/// 与后端 API 对应的数据模型。
+///
+/// 所有字段都做了防御性解析：后端升级新增字段时，旧客户端不应崩溃。
+library;
+
+class MediaItem {
+  const MediaItem({
+    required this.id,
+    required this.fileName,
+    required this.mediaType,
+    required this.mimeType,
+    required this.fileSize,
+    required this.takenAt,
+    required this.width,
+    required this.height,
+    required this.durationMs,
+    required this.videoCodec,
+    required this.audioCodec,
+    required this.thumbnailUrl,
+    required this.originalUrl,
+  });
+
+  final int id;
+  final String fileName;
+  final String mediaType; // photo | video
+  final String mimeType;
+  final int fileSize;
+  final String takenAt;
+  final int width;
+  final int height;
+  final int durationMs;
+  final String videoCodec;
+  final String audioCodec;
+  final String thumbnailUrl;
+  final String originalUrl;
+
+  bool get isVideo => mediaType == 'video';
+
+  /// 拍摄时间。后端统一用 RFC3339 存储，这里转成本地时区展示。
+  DateTime? get takenAtLocal => DateTime.tryParse(takenAt)?.toLocal();
+
+  String get resolution => (width > 0 && height > 0) ? '$width × $height' : '未知';
+
+  String get fileSizeLabel {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var size = fileSize.toDouble();
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit++;
+    }
+    return unit == 0
+        ? '${size.toInt()} ${units[unit]}'
+        : '${size.toStringAsFixed(1)} ${units[unit]}';
+  }
+
+  String get durationLabel {
+    if (durationMs <= 0) return '';
+    final total = (durationMs / 1000).round();
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = s.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$m:$ss';
+  }
+
+  factory MediaItem.fromJson(Map<String, dynamic> j) {
+    int asInt(String k) {
+      final v = j[k];
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return 0;
+    }
+
+    String asStr(String k) => (j[k] as String?) ?? '';
+
+    return MediaItem(
+      id: asInt('id'),
+      fileName: asStr('file_name'),
+      mediaType: asStr('media_type'),
+      mimeType: asStr('mime_type'),
+      fileSize: asInt('file_size'),
+      takenAt: asStr('taken_at'),
+      width: asInt('width'),
+      height: asInt('height'),
+      durationMs: asInt('duration_ms'),
+      videoCodec: asStr('video_codec'),
+      audioCodec: asStr('audio_codec'),
+      thumbnailUrl: asStr('thumbnail_url'),
+      originalUrl: asStr('original_url'),
+    );
+  }
+}
+
+/// 一页媒体数据。
+class MediaPage {
+  const MediaPage({
+    required this.items,
+    required this.total,
+    required this.page,
+    required this.pageSize,
+  });
+
+  final List<MediaItem> items;
+  final int total;
+  final int page;
+  final int pageSize;
+
+  bool get hasMore => page * pageSize < total;
+
+  factory MediaPage.fromJson(Map<String, dynamic> j) {
+    final raw = (j['items'] as List?) ?? const [];
+    return MediaPage(
+      items: raw
+          .whereType<Map<String, dynamic>>()
+          .map(MediaItem.fromJson)
+          .toList(growable: false),
+      total: (j['total'] as num?)?.toInt() ?? 0,
+      page: (j['page'] as num?)?.toInt() ?? 1,
+      pageSize: (j['page_size'] as num?)?.toInt() ?? 60,
+    );
+  }
+}
+
+/// 服务器发现阶段返回的信息。
+class ServerInfo {
+  const ServerInfo({
+    required this.name,
+    required this.version,
+    required this.apiVersion,
+    required this.authRequired,
+  });
+
+  final String name;
+  final String version;
+  final int apiVersion;
+  final bool authRequired;
+
+  factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
+        name: (j['name'] as String?) ?? 'MediaCenter',
+        version: (j['version'] as String?) ?? '?',
+        apiVersion: (j['api_version'] as num?)?.toInt() ?? 0,
+        authRequired: (j['auth_required'] as bool?) ?? true,
+      );
+}
+
+/// 索引统计。
+class LibraryStats {
+  const LibraryStats({
+    required this.photos,
+    required this.videos,
+    required this.totalBytes,
+    required this.folders,
+    required this.ffmpegAvailable,
+  });
+
+  final int photos;
+  final int videos;
+  final int totalBytes;
+  final int folders;
+  final bool ffmpegAvailable;
+
+  int get total => photos + videos;
+
+  factory LibraryStats.fromJson(Map<String, dynamic> j) => LibraryStats(
+        photos: (j['photos'] as num?)?.toInt() ?? 0,
+        videos: (j['videos'] as num?)?.toInt() ?? 0,
+        totalBytes: (j['total_bytes'] as num?)?.toInt() ?? 0,
+        folders: (j['folders'] as num?)?.toInt() ?? 0,
+        ffmpegAvailable: (j['ffmpeg_available'] as bool?) ?? false,
+      );
+}
+
+/// 扫描进度。
+class ScanState {
+  const ScanState({
+    required this.running,
+    required this.filesSeen,
+    required this.indexed,
+    required this.skipped,
+    required this.failed,
+    required this.removed,
+    required this.current,
+    required this.errors,
+  });
+
+  final bool running;
+  final int filesSeen;
+  final int indexed;
+  final int skipped;
+  final int failed;
+  final int removed;
+  final String current;
+  final List<String> errors;
+
+  static const idle = ScanState(
+    running: false,
+    filesSeen: 0,
+    indexed: 0,
+    skipped: 0,
+    failed: 0,
+    removed: 0,
+    current: '',
+    errors: [],
+  );
+
+  factory ScanState.fromJson(Map<String, dynamic> j) => ScanState(
+        running: (j['running'] as bool?) ?? false,
+        filesSeen: (j['files_seen'] as num?)?.toInt() ?? 0,
+        indexed: (j['indexed'] as num?)?.toInt() ?? 0,
+        skipped: (j['skipped'] as num?)?.toInt() ?? 0,
+        failed: (j['failed'] as num?)?.toInt() ?? 0,
+        removed: (j['removed'] as num?)?.toInt() ?? 0,
+        current: (j['current'] as String?) ?? '',
+        errors: ((j['errors'] as List?) ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+      );
+}
+
+/// 已配置的扫描目录。
+class ScanFolder {
+  const ScanFolder({
+    required this.id,
+    required this.path,
+    required this.enabled,
+    required this.lastScan,
+  });
+
+  final int id;
+  final String path;
+  final bool enabled;
+  final String lastScan;
+
+  factory ScanFolder.fromJson(Map<String, dynamic> j) => ScanFolder(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        path: (j['path'] as String?) ?? '',
+        enabled: (j['enabled'] as bool?) ?? true,
+        lastScan: (j['last_scan'] as String?) ?? '',
+      );
+}
+
+/// 相册。
+///
+/// [itemCount] 与 [coverUrl] 由后端推导（封面取相册内最早加入的一项），
+/// 客户端不自己算——否则列表页和详情页很容易算出不一样的结果。
+class Album {
+  const Album({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.itemCount,
+    required this.coverUrl,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final String name;
+  final String description;
+  final int itemCount;
+
+  /// 相对路径，形如 `/api/media/3/thumbnail`。空串表示相册里还没有内容。
+  final String coverUrl;
+
+  final String createdAt;
+  final String updatedAt;
+
+  bool get hasCover => coverUrl.isNotEmpty;
+
+  factory Album.fromJson(Map<String, dynamic> j) => Album(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        name: (j['name'] as String?) ?? '',
+        description: (j['description'] as String?) ?? '',
+        itemCount: (j['item_count'] as num?)?.toInt() ?? 0,
+        coverUrl: (j['cover_url'] as String?) ?? '',
+        createdAt: (j['created_at'] as String?) ?? '',
+        updatedAt: (j['updated_at'] as String?) ?? '',
+      );
+}

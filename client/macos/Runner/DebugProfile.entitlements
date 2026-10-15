@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Debug 构建刻意关闭 App Sandbox。
+
+	  原因：`flutter test integration_test -d macos` 会直接 exec 应用二进制
+	  （而不是经由 LaunchServices 启动），此时 libsecinit 无法应用沙箱配置，
+	  进程会崩在 `_libsecinit_appsandbox`，表现为
+	  "Error waiting for a debug connection: The log reader stopped unexpectedly"。
+
+	  Release 构建保留沙箱（见 Release.entitlements），发布配置不受影响。
+	  沙箱开启时的运行路径已单独用 `flutter run -d macos` 验证通过。
+	  若要让 Debug 也开启沙箱，把下面的 false 改回 true 即可 ——
+	  代价是端到端集成测试无法运行。
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- 局域网直连需要出网权限；沙箱关闭时该键冗余，但保留以维持与 Release 一致。 -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
