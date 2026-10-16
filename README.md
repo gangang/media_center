@@ -3,8 +3,9 @@
 相册 + 影院的本地私有化部署方案。数据全部留在你自己的主机上，客户端通过局域网直连，
 不经过任何云端服务。
 
-**当前进度：阶段一～四已完成；阶段五（手机备份上传）后端已完成并通过 82 项断言验证；
-阶段六 4.1（Android 正式签名 + 按 ABI 拆分 + 图标与启动图）已完成，release 包可覆盖安装升级。**
+**当前进度：阶段一～四已完成；阶段五（手机备份上传）后端已完成（82 项断言验证），
+客户端的平台无关上传核心已完成（29 项单元测试）；阶段六（Android 签名、跨平台二进制、
+开机自启、发布包）已全部完成。手机端的 Android 权限层与上传界面尚未接入 —— 见[路线图](#路线图)。**
 
 ---
 
@@ -53,6 +54,7 @@
 | [开发计划.md](开发计划.md) | 阶段规划、阶段五/六的任务分解与风险、技术债、推进顺序建议 |
 | [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D28，含取舍理由与踩坑记录 |
 | [packaging/INSTALL.md](packaging/INSTALL.md) | **面向使用者**的安装说明（随发布包分发），区别于本文档的开发者视角 |
+| [LICENSE](LICENSE) | Apache License 2.0 |
 | 本文档 | 快速开始、API 参考、开发与验证命令 |
 
 ---
@@ -417,8 +419,7 @@ SHA-1    80:81:AD:AA:79:16:00:E9:9F:5C:D9:25:7A:69:B2:CB:67:84:8D:45
 图标不手绘，由脚本生成（改配色只改脚本里两个常量）：
 
 ```bash
-/Users/zhangbaobao/.workbuddy-ai/binaries/python/envs/default/bin/python \
-  scripts/gen-android-icons.py
+python3 scripts/gen-android-icons.py     # 依赖 Pillow
 ```
 
 一次产出 15 个文件：
@@ -666,7 +667,9 @@ dart run tool/mdns_probe.dart       # 客户端那份逻辑能否发现本服务
 - **老设备上的 10-bit HEVC**：不转码意味着解码能力完全取决于客户端。桌面端 libmpv 没问题，老款 Android 设备可能放不了。低成本兜底是 remux（换容器不重编码），尚未实现。
 - **视频播放依赖 libmpv 原生库**：首次编译需要下载约 16 MB 的 macOS 原生框架包与 mpv 头文件。网络受限环境下需离线预置（见 `DECISIONS.md` D12），否则会在 Swift 编译阶段报 `cannot find type 'mpv_node_list' in scope`，而这个错误信息完全指不到真正的原因。
 - **Debug 构建未启用 App Sandbox**：为让端到端集成测试能启动应用而做的取舍，Release 构建仍然开启沙箱。
-- **备份上传暂无客户端**：后端接口已完整可用并经过 82 项断言验证，但手机端尚未接入。
+- **备份上传还没有可点的入口**：后端接口已完整可用（82 项断言验证），客户端的**平台无关上传核心**
+  （哈希 / 分片 / 续传 / 重试 / 秒传 / 取消）也已完成并有 29 项单元测试；但 **Android 权限层与上传
+  界面尚未接入，所以目前还不能真的从手机传照片**。
 - **上传会话 24 小时后被回收**：跨天中断的传输需要重新开始。客户端侧应把上传状态持久化到本地，
   重启后主动续传（属于阶段五客户端任务）。
 - **上传最小 1 KiB**：与扫描器的下限保持一致——扫描器会跳过小于 1 KiB 的文件，接受更小的上传
@@ -684,5 +687,30 @@ dart run tool/mdns_probe.dart       # 客户端那份逻辑能否发现本服务
 | 四 | 相册管理 | 已完成：后端 API + 级联清理（43 项断言）、客户端界面（端到端测试通过） |
 | 四 | mDNS 自动发现 | 已完成：后端广播（`dns-sd` / `cmd/mdnsprobe` 可发现）+ 客户端连接页自动发现（应用包内端到端验证通过） |
 | 五 | 手机照片备份上传 · **后端** | 已完成：5 个接口 + 分片续传 + 去重秒传 + 原地迁移（82 项断言 + 6 项单元测试） |
-| 五 | 手机照片备份上传 · **客户端** | 待开始（Android 权限、媒体选择器、上传队列、前台服务保活） |
-| 六 | Android 打包、跨平台二进制、开机自启 | 进行中：正式签名 + split-per-abi + 图标与启动图已完成；三平台交叉编译、自启、发布包待做 |
+| 五 | 手机照片备份上传 · **客户端** | 进行中：平台无关的上传核心（哈希 / 分片 / 续传 / 重试 / 秒传 / 取消）已完成，29 项单元测试；Android 权限、媒体选择器、上传界面、前台服务保活待做 |
+| 六 | Android 打包、跨平台二进制、开机自启 | 已完成：正式签名 + split-per-abi + 图标与启动图、5 个目标交叉编译、三平台开机自启、发布包与 `SHA256SUMS`（Windows 二进制只做过结构校验，**未在真机执行**） |
+
+---
+
+## 许可证
+
+本项目以 **Apache License 2.0** 发布，完整条款见 [LICENSE](LICENSE)。
+
+```
+Copyright 2026 Zhang Baobao
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+第三方依赖各自遵循其原有许可证：Go 模块见 `backend/go.mod`，Flutter 包见 `client/pubspec.yaml`，
+macOS 端的 libmpv 原生库见 `DECISIONS.md` D11 / D12。本项目**不附带** ffmpeg，只做检测与提示（D25）。

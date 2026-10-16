@@ -14,8 +14,7 @@
 以及 scaffoldBackgroundColor = 0xFFFAFAFA（启动图背景要跟它一致，否则会白闪）。
 
 依赖：Pillow。用法：
-  /Users/zhangbaobao/.workbuddy-ai/binaries/python/envs/default/bin/python \
-      scripts/gen-android-icons.py
+  python3 scripts/gen-android-icons.py
 """
 
 from __future__ import annotations

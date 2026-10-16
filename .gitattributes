@@ -1,0 +1,30 @@
+# 统一文本文件的换行符。
+#
+# 这对本项目不是洁癖：packaging/service/ 下的脚本会被打进发布包，在 Linux/macOS 上执行。
+# 若在 Windows 上克隆时被自动转成 CRLF，这些脚本会以 "bad interpreter: /bin/sh^M" 或
+# "$'\r': command not found" 失败 —— 而错误信息完全指不到换行符。
+* text=auto eol=lf
+
+# 二进制资源：明确标记，避免 Git 当作文本做换行转换而损坏文件。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.icns binary
+*.jar  binary
+*.ttf  binary
+*.otf  binary
+
+# Windows 批处理必须以 CRLF 检出，否则 cmd.exe 可能解析异常。
+*.cmd  text eol=crlf
+
+# 文本文件（显式声明，便于 GitHub 识别语言与生成正确 diff）。
+*.go    text
+*.dart  text
+*.sh    text eol=lf
+*.md    text
+*.yaml  text
+*.yml   text
+*.json  text
+*.kts   text
+*.plist text
