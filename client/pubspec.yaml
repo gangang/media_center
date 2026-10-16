@@ -45,6 +45,11 @@ dependencies:
   media_kit_libs_video: ^1.0.7
   multicast_dns: ^0.3.3+1
 
+  # 上传要算内容指纹（与后端 quickHash 逐字节一致），sha256 只能自己算。
+  # 这个包本来就被 http 间接带进来了，这里显式声明是因为我们要直接 import 它 ——
+  # 依赖一个"碰巧存在"的传递依赖，会在上游改依赖树时突然断掉。
+  crypto: ^3.0.7
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

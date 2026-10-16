@@ -51,7 +51,7 @@
 |:---|:---|
 | [技术文档.md](技术文档.md) | 前后端技术栈全清单、架构分层、目录结构逐项解析、关键数据流 |
 | [开发计划.md](开发计划.md) | 阶段规划、阶段五/六的任务分解与风险、技术债、推进顺序建议 |
-| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D26，含取舍理由与踩坑记录 |
+| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D28，含取舍理由与踩坑记录 |
 | [packaging/INSTALL.md](packaging/INSTALL.md) | **面向使用者**的安装说明（随发布包分发），区别于本文档的开发者视角 |
 | 本文档 | 快速开始、API 参考、开发与验证命令 |
 
@@ -312,9 +312,20 @@ CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o mediacenter-mac .
 ```bash
 cd client
 flutter analyze
-flutter test               # 单元测试 + widget 测试
+flutter test               # 单元测试 + widget 测试（当前 75 项）
 flutter run -d macos
 ```
+
+> **跑 `flutter test` 前先摘掉代理环境变量**，否则会看到
+> `Unable to connect to flutter_tester process: Invalid WebSocket upgrade request`，
+> 所有测试都挂在**加载阶段**——报错里不会提"代理"，极易误判成测试代码坏了：
+>
+> ```bash
+> env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY flutter test
+> ```
+>
+> 原因：`flutter_tester` 通过本机 WebSocket 回连，而 Dart 的 `HttpClient` 会把连
+> `127.0.0.1` 的握手也发给 `http_proxy`。详见 `DECISIONS.md` D28。
 
 端到端验证（会真实启动窗口、真实发 HTTP、真实用 libmpv 解码）：
 

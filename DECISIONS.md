@@ -677,4 +677,49 @@ got="hello"; echo "（${got}）"    # C locale / UTF-8 locale 都对
 扫描残留用 `grep -nP '\$[A-Za-z0-9_?#]+[^\x00-\x7F]'`（BSD grep 不支持 `-P`，要用 ripgrep）。
 
 
+## D27. 用户取消之后，任务不能被"失败"覆盖
+
+**决策**：`UploadQueue._fail()` 在任务状态已经是 `canceled` 时直接返回，不改状态、不记错误。
+
+**为什么**：取消是**异步**的。用户点取消时，正在途中的那个请求还没回来；队列会顺手让服务端
+清理临时文件，于是那个在途请求回来时看到的是 404。若不拦住，UI 上"已取消"会自己跳成"失败"，
+失败计数也凭空多一项——而用户明明是自己取消的，这不是他该看到的结果。
+
+**发现过程**：写"上传途中取消"这条测试时，期望 `canceled`、实际拿到 `failed`。
+一开始以为是自己测试写错了，追下去才发现是队列的 bug：`_fail` 无条件覆盖状态。
+**这类 bug 只在"取消"和"出错"同时发生时出现**，手工点两下几乎碰不到。
+
+**同类教训——"被引用"不等于"可达"**：本轮还删掉了 `_Retryable` 这个私有异常。它有两处
+`is _Retryable` 检查，看起来是被用到的，但它**从来没有被构造过**，而且私有类型外部文件也抛
+不出来，所以那两个分支永远为假。只出现在类型判断里、从不被实例化的私有类型，就是伪装成
+有逻辑的死代码——分析器的 `unused_element` 正是靠这个报出来的。
+
+
+## D28. 跑客户端测试前必须摘掉代理环境变量
+
+**决策**：本机跑 `flutter test` 一律用
+
+```bash
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY flutter test
+```
+
+**为什么**：`flutter test` 会拉起 `flutter_tester` 子进程，测试框架通过 **WebSocket 连回本机**
+来通信。Dart 的 `HttpClient` 认 `http_proxy`，而这个环境里四个代理变量都设了、`no_proxy`
+却是空的——于是连 `127.0.0.1` 的握手也被发给了代理，代理不认 WebSocket 升级，测试全部挂在
+**加载阶段**：
+
+```
+Failed to load "..._test.dart": Unable to connect to flutter_tester process:
+WebSocketException: Invalid WebSocket upgrade request
+```
+
+**为什么这个坑值得单独记一条**：报错信息里**完全没有"代理"两个字**，而且失败发生在
+**加载测试文件**阶段——看起来像测试代码写坏了或 Flutter SDK 出了问题，真正的原因却在环境里。
+第一次遇到时很容易去翻测试代码。
+
+**更稳的做法**：设 `no_proxy=127.0.0.1,localhost`（比逐个 `-u` 更完整，本项目尚未写进脚本）。
+Go 后端不受影响：`go test` 不连本机 WebSocket。
+
+
+
 

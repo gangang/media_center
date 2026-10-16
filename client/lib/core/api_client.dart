@@ -1,16 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'upload/upload_models.dart';
 
 /// 调用后端失败时抛出，[message] 已是可直接展示给用户的中文说明。
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.body});
 
   final String message;
   final int? statusCode;
+
+  /// 服务端返回的原始 JSON body（能解析出来时）。
+  ///
+  /// 有些错误是**结构化的**，不只是给人看的一句话：上传完成时的 409 会带上
+  /// `missing: [3, 7]`，客户端要靠它补片。把 body 挂在这里，比让每个调用点
+  /// 各自重新解析一遍响应要可靠。
+  final Map<String, dynamic>? body;
 
   @override
   String toString() => message;
@@ -22,12 +31,25 @@ class ApiException implements Exception {
 /// 过期的服务器地址或令牌。
 class ApiClient {
   ApiClient({required String baseUrl, required this.token})
-      : baseUrl = normalizeBaseUrl(baseUrl);
+    : baseUrl = normalizeBaseUrl(baseUrl);
 
   final String baseUrl;
   final String token;
 
   static const _timeout = Duration(seconds: 15);
+
+  /// 单片上传的时限。
+  ///
+  /// 比默认的 15 秒宽松得多：4 MiB 在慢速 WiFi 上花掉 15 秒以上是常态，
+  /// 用默认值会把"网慢"误判成"上传失败"，然后重试整片 —— 越慢越糟。
+  static const _chunkTimeout = Duration(minutes: 2);
+
+  /// create / complete 的时限。
+  ///
+  /// `complete` 在服务端要做的事不少：重算哈希、抢目标文件名、移动文件、建索引、
+  /// 生成缩略图。一个 4 GB 视频这几步加起来远超 15 秒。而它一旦超时，
+  /// 客户端会以为失败、服务端其实已经成功 —— 正是最不该出现的状态。
+  static const _uploadOpTimeout = Duration(minutes: 5);
 
   /// 把用户随手输入的地址补全成规范形式。
   ///
@@ -57,12 +79,13 @@ class ApiClient {
     String path, {
     Map<String, String>? query,
     bool authenticated = true,
+    Duration? timeout,
   }) async {
     final http.Response res;
     try {
       res = await http
           .get(_uri(path, query), headers: authenticated ? authHeaders : null)
-          .timeout(_timeout);
+          .timeout(timeout ?? _timeout);
     } on SocketException {
       throw ApiException('无法连接到服务器，请检查地址与网络');
     } on http.ClientException catch (e) {
@@ -75,22 +98,20 @@ class ApiClient {
 
   Future<Map<String, dynamic>> _postJson(
     String path,
-    Map<String, dynamic> body,
-  ) =>
-      _sendJson('POST', path, body);
+    Map<String, dynamic> body, {
+    Duration? timeout,
+  }) => _sendJson('POST', path, body, timeout: timeout);
 
   Future<Map<String, dynamic>> _patchJson(
     String path,
     Map<String, dynamic> body,
-  ) =>
-      _sendJson('PATCH', path, body);
+  ) => _sendJson('PATCH', path, body);
 
   /// DELETE 允许带 body：后端移出相册成员时两种传参都支持。
   Future<Map<String, dynamic>> _deleteJson(
     String path, [
     Map<String, dynamic>? body,
-  ]) =>
-      _sendJson('DELETE', path, body);
+  ]) => _sendJson('DELETE', path, body);
 
   /// 统一的 JSON 请求发送口。
   ///
@@ -99,8 +120,9 @@ class ApiClient {
   Future<Map<String, dynamic>> _sendJson(
     String method,
     String path,
-    Map<String, dynamic>? body,
-  ) async {
+    Map<String, dynamic>? body, {
+    Duration? timeout,
+  }) async {
     final req = http.Request(method, _uri(path));
     req.headers.addAll(authHeaders);
     if (body != null) {
@@ -110,8 +132,11 @@ class ApiClient {
 
     final http.Response res;
     try {
-      final streamed = await req.send().timeout(_timeout);
-      res = await http.Response.fromStream(streamed);
+      final limit = timeout ?? _timeout;
+      final streamed = await req.send().timeout(limit);
+      // 读 body 也要限时：服务端可能在响应头之后卡住，只给 send() 加超时
+      // 会在这种情况下一直挂着。
+      res = await http.Response.fromStream(streamed).timeout(limit);
     } on SocketException {
       throw ApiException('无法连接到服务器，请检查地址与网络');
     } on http.ClientException catch (e) {
@@ -128,15 +153,21 @@ class ApiClient {
     }
     if (res.statusCode >= 400) {
       String detail = 'HTTP ${res.statusCode}';
+      Map<String, dynamic>? body;
       try {
-        final body = jsonDecode(utf8.decode(res.bodyBytes));
-        if (body is Map && body['error'] is String) {
-          detail = body['error'] as String;
+        final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+        if (decoded is Map) {
+          body = decoded.cast<String, dynamic>();
+          if (body['error'] is String) detail = body['error'] as String;
         }
       } catch (_) {
         // 保留原始状态码即可
       }
-      throw ApiException('服务器返回错误：$detail', statusCode: res.statusCode);
+      throw ApiException(
+        '服务器返回错误：$detail',
+        statusCode: res.statusCode,
+        body: body,
+      );
     }
     try {
       final decoded = jsonDecode(utf8.decode(res.bodyBytes));
@@ -250,29 +281,23 @@ class ApiClient {
   }) async {
     final json = await _getJson(
       '/api/albums/$albumId/media',
-      query: {
-        'page': '$page',
-        'page_size': '$pageSize',
-        'sort': sort,
-      },
+      query: {'page': '$page', 'page_size': '$pageSize', 'sort': sort},
     );
     return MediaPage.fromJson(json);
   }
 
   /// 返回真正新增的数量（重复加入的会被后端忽略）。
   Future<int> addAlbumMedia(int albumId, List<int> mediaIds) async {
-    final json = await _postJson(
-      '/api/albums/$albumId/media',
-      {'media_ids': mediaIds},
-    );
+    final json = await _postJson('/api/albums/$albumId/media', {
+      'media_ids': mediaIds,
+    });
     return (json['added'] as num?)?.toInt() ?? 0;
   }
 
   Future<int> removeAlbumMedia(int albumId, List<int> mediaIds) async {
-    final json = await _deleteJson(
-      '/api/albums/$albumId/media',
-      {'media_ids': mediaIds},
-    );
+    final json = await _deleteJson('/api/albums/$albumId/media', {
+      'media_ids': mediaIds,
+    });
     return (json['removed'] as num?)?.toInt() ?? 0;
   }
 
@@ -283,6 +308,96 @@ class ApiClient {
         .whereType<Map<String, dynamic>>()
         .map(Album.fromJson)
         .toList(growable: false);
+  }
+
+  // ---------------------------------------------------------------- 上传
+
+  /// 开一个上传会话，或者命中秒传。
+  ///
+  /// 传 [contentHash] 是值得的：服务端拿它去查已有内容，命中就一个字节都不用传。
+  /// 手机反复备份同一个相册时，这一步把绝大部分文件变成了一个小请求。
+  Future<CreateUploadResult> createUpload({
+    required String fileName,
+    required int fileSize,
+    required String contentHash,
+    int chunkSize = 0,
+  }) async {
+    final json = await _postJson('/api/uploads', {
+      'file_name': fileName,
+      'file_size': fileSize,
+      'content_hash': contentHash,
+      // 0 表示"你替我定"，服务端会用它自己的默认值（4 MiB）。
+      if (chunkSize > 0) 'chunk_size': chunkSize,
+    }, timeout: _uploadOpTimeout);
+    return CreateUploadResult.fromJson(json);
+  }
+
+  /// 上传一片。分片是**直落目标偏移**的，服务端不缓存也不拼装。
+  Future<ChunkAck> putUploadChunk(
+    String uploadId,
+    int index,
+    Uint8List bytes,
+  ) async {
+    final req = http.Request(
+      'PUT',
+      _uri('/api/uploads/$uploadId/chunks/$index'),
+    );
+    req.headers.addAll(authHeaders);
+    req.headers['Content-Type'] = 'application/octet-stream';
+    // 用 bodyBytes 而不是 body：body 会按字符串编码，二进制会坏。
+    // 它同时会设好 Content-Length，而服务端正是拿它校验分片大小的。
+    req.bodyBytes = bytes;
+
+    final http.Response res;
+    try {
+      final streamed = await req.send().timeout(_chunkTimeout);
+      res = await http.Response.fromStream(streamed).timeout(_chunkTimeout);
+    } on SocketException {
+      throw ApiException('无法连接到服务器，请检查地址与网络');
+    } on http.ClientException catch (e) {
+      throw ApiException('网络请求失败：${e.message}');
+    } catch (e) {
+      throw ApiException('请求失败：$e');
+    }
+    return ChunkAck.fromJson(_decode(res));
+  }
+
+  /// 请服务端校验并入库。
+  ///
+  /// 分片不齐时后端返回 409 并附上缺哪几片，这里转成
+  /// [MissingChunksException] —— 调用方必须处理它（补齐再试），
+  /// 而忽略一个返回值比忽略一个异常容易得多。
+  Future<CompleteUploadResult> completeUpload(String uploadId) async {
+    try {
+      final json = await _postJson(
+        '/api/uploads/$uploadId/complete',
+        const {},
+        timeout: _uploadOpTimeout,
+      );
+      return CompleteUploadResult.fromJson(json);
+    } on ApiException catch (e) {
+      final missing = _missingFrom(e);
+      if (missing != null) throw MissingChunksException(missing);
+      rethrow;
+    }
+  }
+
+  List<int>? _missingFrom(ApiException e) {
+    if (e.statusCode != 409) return null;
+    final raw = e.body?['missing'];
+    if (raw is! List) return null;
+    return raw.whereType<num>().map((n) => n.toInt()).toList(growable: false);
+  }
+
+  /// 查会话进度。断点续传靠它拿到"已经在服务端落盘的分片序号"。
+  Future<UploadSession> getUpload(String uploadId) async {
+    final json = await _getJson('/api/uploads/$uploadId');
+    return UploadSession.fromJson(json);
+  }
+
+  /// 放弃一次上传并让服务端清理临时文件与数据库行。
+  Future<void> cancelUpload(String uploadId) async {
+    await _deleteJson('/api/uploads/$uploadId');
   }
 
   /// 缩略图与原文件的完整 URL。
