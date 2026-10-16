@@ -1,12 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="?android:colorBackground" />
+<!--
+  启动图（splash）。minSdk=24，所以生效的是这一份（drawable-v21 覆盖 drawable）。
+  内容必须与 drawable/launch_background.xml 保持一致，改一处要改两处。
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+  原模板用的是 ?android:colorBackground，它会跟随系统深浅色（见 values-night/styles.xml），
+  于是深色模式下启动图变黑，而客户端本身固定浅色 —— 启动瞬间会黑闪一下。
+  这里改成固定白色，配合 values-night/styles.xml 的调整一起消除这个闪变。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/white" />
+
+    <item>
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+            android:src="@drawable/launch_image" />
+    </item>
 </layer-list>

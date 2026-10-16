@@ -1,7 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  深色模式下的 Android 窗口主题。
+
+  ⚠️ 这里刻意用 Light 而不是模板默认的 Theme.Black.NoTitleBar。
+
+  原因：客户端**没有深色主题** —— lib/main.dart 里写死了
+  `brightness: Brightness.light` + `scaffoldBackgroundColor: 0xFFFAFAFA`，
+  且没有配置 `darkTheme`。而 Flutter 模板生成的值（Theme.Black）会让窗口背景
+  跟随系统深浅色：系统开深色时，窗口是黑的、应用是浅的，启动瞬间会黑闪一下。
+
+  也就是说，在模板状态下"系统深色模式 + 本应用"必然产生一次闪变。
+
+  如果将来客户端真的做了深色主题，把下面两个 parent 改回
+  @android:style/Theme.Black.NoTitleBar，并让 NormalTheme 的 windowBackground
+  跟随 Flutter 的深色背景色即可。
+-->
 <resources>
-    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is on -->
-    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <!-- Show a splash screen on the activity. Automatically removed when
              the Flutter engine draws its first frame -->
         <item name="android:windowBackground">@drawable/launch_background</item>
@@ -12,7 +27,7 @@
          running.
 
          This Theme is only used starting with V2 of Flutter's Android embedding. -->
-    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
 </resources>

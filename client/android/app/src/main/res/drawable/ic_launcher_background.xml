@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  adaptive icon 的底色层。颜色必须与 scripts/gen-android-icons.py 里的
+  BRAND_START / BRAND_END 保持一致，否则传统图标（PNG 自带底色）和
+  adaptive 图标（这里提供底色）看起来会是两个不同的 App。
+
+  angle=315 表示左上到右下，与脚本里 linear_gradient 的方向一致。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:startColor="#FF2F6BFF"
+        android:endColor="#FF6D4AFF"
+        android:type="linear"
+        android:angle="315" />
+</shape>

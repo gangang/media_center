@@ -1,12 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!--
+  启动图（splash）。Flutter 引擎画出第一帧后这个界面会被移除。
+
+  底色用纯白，和 NormalTheme 的窗口背景（Theme.Light 的白色）一致 ——
+  两者不一致会在"启动图 → 第一帧"之间闪一下色块。
+
+  logo 用渐变色的图形而不是白色：底色是浅色，白色 logo 在上面根本看不见。
+  见 scripts/gen-android-icons.py 的 launch_image 部分。
+
+  注意：minSdk=24，所以实际生效的是 drawable-v21/launch_background.xml。
+  这个文件保留是为了与 Flutter 模板结构一致，两份内容必须相同。
+-->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@android:color/white" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    <item>
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+            android:src="@drawable/launch_image" />
+    </item>
 </layer-list>

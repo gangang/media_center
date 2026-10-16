@@ -515,5 +515,44 @@ apksigner verify --print-certs build/app/outputs/flutter-apk/app-arm64-v8a-relea
 **遗留**：debug keystore 在 macOS 上是 `~/.android/debug.keystore`，本机固定，
 但它不是"我的"密钥，换机器就变——这正是原先"测试包无法升级"的根因。
 
+---
+
+## D22. 图标用脚本生成，并修掉深色模式下的启动黑闪
+
+**决策**：应用图标与启动图由 `scripts/gen-android-icons.py`（Pillow）程序化生成，
+不引设计稿、不引图标库。图形是「品牌色渐变圆角方底 + 白色相框轮廓内含播放三角」——
+相框对应相册，播放三角对应影院，两个功能一个图形。
+
+**为什么程序化生成而不是画一张图**：
+
+1. **adaptive icon 有硬几何约束。** 前景层是 108dp 画布，但只有中心 72dp 保证可见
+   （launcher 会按自己的形状裁切）。图形占比必须 < 0.667。这个约束写成
+   `mark_frac` 常量后可以用代码核对（实测 0.583），靠肉眼对齐则容易在某一种裁切形状下翻车。
+2. **一共 15 个文件**（3 种用途 × 5 种密度），手改必然漂移。
+3. **配色与客户端主题对齐只改两个常量。** `BRAND_START` 直接取自
+   `lib/main.dart` 的 `colorSchemeSeed = 0xFF2F6BFF`，
+   `drawable/ic_launcher_background.xml` 里的渐变也要跟着改——这一处是脚本管不到的，
+   所以两边的注释互相指向对方。
+
+**为什么不用 AI 生图**：图标要的是几何精度，不是绘画性；AI 出图无法保证安全区、
+无法保证 15 个尺寸风格一致，每张还额外花额度。程序化生成把这三个问题一起去掉了。
+
+**顺带修掉一个既有缺陷（模板默认值与本项目前提冲突）**：
+`values-night/styles.xml` 里 Flutter 模板给的是 `Theme.Black.NoTitleBar`，窗口背景跟随
+系统深浅色。但客户端**没有深色主题**——`lib/main.dart` 写死
+`brightness: Brightness.light`，也没有配 `darkTheme`。于是在"系统开深色 + 本应用"
+这个组合下，启动瞬间是黑底、随后切到浅色应用，产生一次黑闪。
+
+修法是让 `values-night` 也用 Light 主题，并在文件里写明"若将来真做深色主题，
+把 parent 改回 `Theme.Black`"。**不删掉这个文件**，因为它记录了"为什么这里和模板不一样"。
+
+这类问题的共同点是：**模板的默认值假设了你会跟随系统深浅色，而这个项目明确不跟随。**
+以后凡是看到模板里成对出现的 `values/` + `values-night/`，都要先问一句
+"这个项目真的两套都有吗"。
+
+**遗留**：只做了 Android。macOS 的图标在
+`macos/Runner/Assets.xcassets/AppIcon.appiconset/` 仍是 Flutter 默认，
+尚未替换（macOS 不在 MVP 的分发目标内，见 D10）。
+
 
 

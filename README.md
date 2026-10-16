@@ -4,7 +4,7 @@
 不经过任何云端服务。
 
 **当前进度：阶段一～四已完成；阶段五（手机备份上传）后端已完成并通过 82 项断言验证；
-阶段六 4.1（Android 正式签名 + 按 ABI 拆分）已完成，release 包可覆盖安装升级。**
+阶段六 4.1（Android 正式签名 + 按 ABI 拆分 + 图标与启动图）已完成，release 包可覆盖安装升级。**
 
 ---
 
@@ -51,7 +51,7 @@
 |:---|:---|
 | [技术文档.md](技术文档.md) | 前后端技术栈全清单、架构分层、目录结构逐项解析、关键数据流 |
 | [开发计划.md](开发计划.md) | 阶段规划、阶段五/六的任务分解与风险、技术债、推进顺序建议 |
-| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D21，含取舍理由与踩坑记录 |
+| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D22，含取舍理由与踩坑记录 |
 | 本文档 | 快速开始、API 参考、开发与验证命令 |
 
 ---
@@ -270,7 +270,8 @@ media_center/
     ├── make-test-media.sh       # 生成测试素材（含真实 EXIF 的 JPEG）
     ├── verify-api.sh            # 后端 API 回归验证
     ├── verify-albums.sh         # 相册功能回归验证（含级联清理）
-    └── verify-upload.sh         # 上传备份回归验证（自带服务端与独立数据目录）
+    ├── verify-upload.sh         # 上传备份回归验证（自带服务端与独立数据目录）
+    └── gen-android-icons.py     # 生成 Android 图标与启动图（15 个文件，见下）
 ```
 
 ---
@@ -387,6 +388,30 @@ SHA-1    80:81:AD:AA:79:16:00:E9:9F:5C:D9:25:7A:69:B2:CB:67:84:8D:45
 > 版本号的唯一来源是 `pubspec.yaml` 的 `version: 1.0.0+1`（`+` 前是 versionName，
 > 后是 versionCode），由 Flutter Gradle 插件注入，不要在 `build.gradle.kts` 里再写一份。
 > **能不能覆盖升级由 versionCode 是否递增决定；签名决定的是"能不能装上"。**
+
+#### 图标与启动图
+
+图标不手绘，由脚本生成（改配色只改脚本里两个常量）：
+
+```bash
+/Users/zhangbaobao/.workbuddy-ai/binaries/python/envs/default/bin/python \
+  scripts/gen-android-icons.py
+```
+
+一次产出 15 个文件：
+
+| 用途 | 目录 | 尺寸 | 说明 |
+|:---|:---|:---|:---|
+| 传统图标 | `mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` | 48–192 | API 24-25 用，自带圆角方底（launcher 不裁切） |
+| adaptive 前景 | `mipmap-*/ic_launcher_foreground.png` | 108–432 | API 26+ 用，只有白色图形；底色由 `drawable/ic_launcher_background.xml` 提供 |
+| 启动图 logo | `drawable-*/launch_image.png` | 112–448 | 浅色底上用**渐变**图形（白色 logo 在浅底上看不见） |
+
+> **改配色要同时改两处**：脚本里的 `BRAND_START` / `BRAND_END`，
+> 以及 `drawable/ic_launcher_background.xml` 的渐变（adaptive 底色不走脚本）。
+> 两边的注释互相指向对方。
+
+> adaptive 前景的图形占比必须小于 0.667（108dp 画布只有中心 72dp 保证可见），
+> 脚本里是 `ADAPTIVE_MARK_FRAC`，实测值 0.583。
 
 ### 生成测试素材
 
@@ -552,4 +577,4 @@ dart run tool/mdns_probe.dart       # 客户端那份逻辑能否发现本服务
 | 四 | mDNS 自动发现 | 已完成：后端广播（`dns-sd` / `cmd/mdnsprobe` 可发现）+ 客户端连接页自动发现（应用包内端到端验证通过） |
 | 五 | 手机照片备份上传 · **后端** | 已完成：5 个接口 + 分片续传 + 去重秒传 + 原地迁移（82 项断言 + 6 项单元测试） |
 | 五 | 手机照片备份上传 · **客户端** | 待开始（Android 权限、媒体选择器、上传队列、前台服务保活） |
-| 六 | Android 打包、跨平台二进制、开机自启 | 进行中：正式签名 + split-per-abi 已完成（32 MB/ABI，签名已验证）；图标与启动图待做 |
+| 六 | Android 打包、跨平台二进制、开机自启 | 进行中：正式签名 + split-per-abi + 图标与启动图已完成；三平台交叉编译、自启、发布包待做 |
