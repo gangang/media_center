@@ -3,7 +3,8 @@
 相册 + 影院的本地私有化部署方案。数据全部留在你自己的主机上，客户端通过局域网直连，
 不经过任何云端服务。
 
-**当前进度：阶段一～四已完成，阶段五（手机备份上传）的后端已完成并通过 82 项断言验证。**
+**当前进度：阶段一～四已完成；阶段五（手机备份上传）后端已完成并通过 82 项断言验证；
+阶段六 4.1（Android 正式签名 + 按 ABI 拆分）已完成，release 包可覆盖安装升级。**
 
 ---
 
@@ -50,7 +51,7 @@
 |:---|:---|
 | [技术文档.md](技术文档.md) | 前后端技术栈全清单、架构分层、目录结构逐项解析、关键数据流 |
 | [开发计划.md](开发计划.md) | 阶段规划、阶段五/六的任务分解与风险、技术债、推进顺序建议 |
-| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D20，含取舍理由与踩坑记录 |
+| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D21，含取舍理由与踩坑记录 |
 | 本文档 | 快速开始、API 参考、开发与验证命令 |
 
 ---
@@ -336,6 +337,57 @@ flutter test integration_test/discovery_test.dart -d macos
 > 构建关闭了 App Sandbox —— 否则 `flutter test integration_test` 无法启动应用
 > （详见 `macos/Runner/DebugProfile.entitlements` 内的说明）。
 
+### Android 正式打包（签名）
+
+release 包由 `client/android/app/upload-keystore.jks` 签名，密码与别名在同目录的
+`key.properties` 里。**这两个文件都被 `.gitignore` 排除，不在版本库中。**
+
+```bash
+cd client
+flutter build apk --release --split-per-abi
+# → build/app/outputs/flutter-apk/app-arm64-v8a-release.apk    约 32 MB
+#   build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk  约 29 MB
+#   build/app/outputs/flutter-apk/app-x86_64-release.apk       约 37 MB
+```
+
+按 ABI 拆分后每个包只含一个 ABI；不加 `--split-per-abi` 的 universal 包会把三个 ABI
+都装进去，95.6 MB。现代手机装 `arm64-v8a` 那一个就够。
+
+验证签名（应打印出与 keystore 一致的 SHA-256，而不是 debug 证书）：
+
+```bash
+$ANDROID_HOME/build-tools/37.0.0/apksigner verify --print-certs \
+  build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+当前签名证书指纹（换 keystore 时这里要同步更新）：
+
+```
+SHA-256  43:37:83:C2:7E:5B:6F:D0:02:27:4B:FD:44:57:64:BB:74:E9:2E:D0:82:CF:98:00:59:2E:A0:78:9B:F7:50:EA
+SHA-1    80:81:AD:AA:79:16:00:E9:9F:5C:D9:25:7A:69:B2:CB:67:84:8D:45
+```
+
+> **`upload-keystore.jks` 和 `key.properties` 必须一起离线备份。**
+> Android 靠签名证书识别"这是同一个应用"：keystore 丢了就再也签不出能覆盖安装的包，
+> 只能换包名从头来（用户数据全丢）。缺 `key.properties` 同样打不开这个 keystore。
+
+**找不到 `key.properties` 时 release 构建会直接失败**（而不是静默用 debug 密钥签出来），
+报错里会说明原因和三种处理办法。这是刻意的：debug 签名的包与正式包签名不同，安装器会拒绝
+覆盖安装，而"构建成功但升不了级"比"构建失败"更难发现。
+
+- 只想确认代码能编过 → `flutter build apk --debug`
+- 确实需要一个 debug 签名的 release 包 → 在 `android/gradle.properties` 里加
+  `mc.allowDebugSigning=true`
+
+> 为什么不做成"打一条警告然后继续"：实测 `flutter build apk` 会过滤掉 Gradle 的日志，
+> 脚本里的 `logger.warn` 和 `println` 都看不到；而且 Gradle 9 默认开启配置缓存，
+> 脚本体从第二次构建起就不再重新执行。**"打警告"这个机制既不一定显示、也不一定执行**，
+> 只有构建失败是 Flutter 一定会透传给用户的。
+
+> 版本号的唯一来源是 `pubspec.yaml` 的 `version: 1.0.0+1`（`+` 前是 versionName，
+> 后是 versionCode），由 Flutter Gradle 插件注入，不要在 `build.gradle.kts` 里再写一份。
+> **能不能覆盖升级由 versionCode 是否递增决定；签名决定的是"能不能装上"。**
+
 ### 生成测试素材
 
 ```bash
@@ -500,4 +552,4 @@ dart run tool/mdns_probe.dart       # 客户端那份逻辑能否发现本服务
 | 四 | mDNS 自动发现 | 已完成：后端广播（`dns-sd` / `cmd/mdnsprobe` 可发现）+ 客户端连接页自动发现（应用包内端到端验证通过） |
 | 五 | 手机照片备份上传 · **后端** | 已完成：5 个接口 + 分片续传 + 去重秒传 + 原地迁移（82 项断言 + 6 项单元测试） |
 | 五 | 手机照片备份上传 · **客户端** | 待开始（Android 权限、媒体选择器、上传队列、前台服务保活） |
-| 六 | Android 打包、跨平台二进制、开机自启 | 待开始（下一步：正式签名，当前 release 包用 debug 密钥） |
+| 六 | Android 打包、跨平台二进制、开机自启 | 进行中：正式签名 + split-per-abi 已完成（32 MB/ABI，签名已验证）；图标与启动图待做 |

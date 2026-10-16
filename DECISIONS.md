@@ -429,4 +429,91 @@ Dart 可行，不需要平台通道。** 这一步先做探测再引依赖，省
 或者将来加一条含字符串字面量的语句，就会重演，而且是在别人的机器上重演。
 所以修的是切分逻辑本身——`splitStatements` 先剥掉 `--` 行注释再切分。
 
+---
+
+## D21. Android 用正式 keystore 签名；缺密钥时构建失败，而不是静默用 debug 签名
+
+**决策**：release 构建从 `android/key.properties` 读取签名材料（keystore 路径、密码、别名）；
+该文件与 `app/upload-keystore.jks` 都在 `.gitignore` 里。**找不到 `key.properties` 时
+release 构建直接失败**，报错里说明原因并给出三种处理办法。显式退出开关是
+`android/gradle.properties` 里的 `mc.allowDebugSigning=true`（默认关闭）。
+
+**为什么不静默回退到 debug 密钥**：debug 签名的包与正式包签名不同，安装器会拒绝覆盖安装
+（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。静默回退产出的就是一个"看起来是正式包、实际
+升不了级"的东西——正好是这个阶段要消灭的那个问题。**构建失败至少是响的，静默降级是哑的。**
+
+**这条决策中途改过一次，过程比结论更值得记。** 第一版实现的是"回退 + `logger.warn` 告警"，
+理由是"别人 clone 下来不配密钥也能编译"。实测发现这个机制根本不成立：
+
+1. **`flutter build apk` 会过滤 Gradle 的日志输出。** 脚本里的 `logger.warn` 看不到。
+   为排除"只是日志级别不够"这种可能，我临时加了一句 `println` 当探针——同样看不到。
+2. **Gradle 9 默认开启配置缓存。** 脚本体（包括那条 `warn`）只在配置阶段执行一次，
+   第二次构建起就不再重新执行。所以它连"每次都会跑"都保证不了。
+
+也就是说"打一条警告"既不一定显示、也不一定执行。反过来，**构建失败是 Flutter 一定会
+透传给用户的**（`Gradle task assembleRelease failed with exit code 1` 加上完整报错）。
+
+代价是"没配密钥的人编不出 release 包"。这个代价可以接受，因为那两种真实需求都有更好的出口：
+只想确认代码能编过就用 `--debug`；确实要一个 debug 签名的 release 包就显式开开关。
+
+**验证**（四种组合都实测过，不是推断）：
+
+| 构建 | `key.properties` | `mc.allowDebugSigning` | 结果 |
+|:---|:---|:---|:---|
+| `--release` | 存在 | 未设置 | 成功，签名 = `433783c2…`（正式密钥） |
+| `--release` | 不存在 | 未设置 | **失败**，报错含完整指引 |
+| `--release` | 不存在 | `true` | 成功，签名 = `7f8919af…`（debug 密钥） |
+| `--debug` | 不存在 | 未设置 | 成功（不受影响，见下） |
+
+**第二个坑：fail-closed 不能写在 `buildTypes.release` 里。** 那段配置在**配置阶段**
+对所有构建都会执行一次，所以写在那里的 `require` 会让 `flutter build apk --debug`
+一起失败——而我的报错信息里恰好推荐用户"改用 `--debug`"。也就是说第一版给出的指引
+本身就是错的，只是当时没测 `--debug` 才没暴露。
+
+正确落点是 `tasks.matching { it.name == "assembleRelease" }.configureEach { doFirst { ... } }`：
+放在执行期，只命中 release。这同时避开了配置缓存——配置期的判断会被缓存，执行期的不会。
+
+**核对方法**（应该成为发版前的固定动作）：
+
+```bash
+apksigner verify --print-certs build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+# 期望 SHA-256:
+# 43:37:83:C2:7E:5B:6F:D0:02:27:4B:FD:44:57:64:BB:74:E9:2E:D0:82:CF:98:00:59:2E:A0:78:9B:F7:50:EA
+```
+
+**几个容易踩的点**：
+
+1. **`storeFile` 的相对路径基准。** Flutter 官方文档里的
+   `file(keystoreProperties['storeFile'])` 写在 `app/build.gradle.kts` 里，实际是相对
+   **app/** 解析的；但 `key.properties` 放在 `android/` 下，读的人很容易以为相对
+   `android/`。这里统一用 `rootProject.file(...)` 显式锚定到 `android/`，
+   `key.properties` 里写 `storeFile=app/upload-keystore.jks`，把歧义消掉。
+
+2. **PKCS12 而不是 JKS。** Java 9 起 PKCS12 是默认密钥库格式，JKS 是遗留格式。
+   这里 `keytool -storetype PKCS12` 并在 gradle 里显式声明 `storeType`，不依赖 JDK 默认值，
+   否则换个 JDK 版本可能读不出同一个文件。PKCS12 的约束是 key password 必须等于
+   store password，所以 `key.properties` 里两个字段值相同。
+
+3. **`minSdk = 24`，所以只有 v2 签名、没有 v1（JAR）签名是正确的。**
+   `apksigner verify --verbose` 会打印 `Verified using v1 scheme (JAR signing): false`，
+   这不是缺陷——v1 只在 API < 24 的设备上才需要。看到这行不用去开 `enableV1Signing`。
+
+4. **签名与升级是两件独立的事。** 能不能**装上**取决于包名 + 签名证书是否一致；
+   能不能**升到新版本**取决于 versionCode 是否递增。签名对了但 versionCode 没涨，
+   安装器会拒绝（`INSTALL_FAILED_VERSION_DOWNGRADE`）。
+
+5. **已有的测试包必须卸载一次。** 之前那个 91 MB 的包是 debug 密钥签的，与正式包签名不同，
+   安装器会直接拒绝覆盖（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。这是一次性的：
+   卸掉重装之后，后续所有正式包都能平滑升级。
+
+**为什么版本号只在 `pubspec.yaml` 写一份**：Flutter Gradle 插件会把
+`version: 1.0.0+1` 拆成 versionName / versionCode 注入，在 `build.gradle.kts` 里再写一遍
+就多了一个会漂移的副本。客户端版本（`1.0.0`）与后端 `api.Version`（`0.1.0`）不必相同——
+它们各自独立发布；真正约束兼容性的是后端的 `api_version`（整数，当前为 `1`），
+客户端已经读了它（`models.dart` 的 `apiVersion`）。
+
+**遗留**：debug keystore 在 macOS 上是 `~/.android/debug.keystore`，本机固定，
+但它不是"我的"密钥，换机器就变——这正是原先"测试包无法升级"的根因。
+
+
 
