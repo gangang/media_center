@@ -51,7 +51,8 @@
 |:---|:---|
 | [技术文档.md](技术文档.md) | 前后端技术栈全清单、架构分层、目录结构逐项解析、关键数据流 |
 | [开发计划.md](开发计划.md) | 阶段规划、阶段五/六的任务分解与风险、技术债、推进顺序建议 |
-| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D22，含取舍理由与踩坑记录 |
+| [DECISIONS.md](DECISIONS.md) | 技术决策记录 D1–D26，含取舍理由与踩坑记录 |
+| [packaging/INSTALL.md](packaging/INSTALL.md) | **面向使用者**的安装说明（随发布包分发），区别于本文档的开发者视角 |
 | 本文档 | 快速开始、API 参考、开发与验证命令 |
 
 ---
@@ -266,13 +267,24 @@ media_center/
 │   ├── tool/
 │   │   └── mdns_probe.dart      # 诊断：从本机能否发现本服务（复用 core 里的同一份逻辑）
 │   └── integration_test/        # 端到端验证（播放、相册、自动发现）
+├── packaging/                   # 发布用的静态素材
+│   ├── INSTALL.md               # 面向非开发者的安装说明（随每个发布包一起发）
+│   └── service/                 # 各平台开机自启脚本
+│       ├── darwin/              # LaunchAgent：install.sh / uninstall.sh
+│       ├── linux/               # systemd user unit：install.sh / uninstall.sh
+│       └── windows/             # 计划任务：install.cmd / uninstall.cmd / run.cmd
 └── scripts/
     ├── make-test-media.sh       # 生成测试素材（含真实 EXIF 的 JPEG）
     ├── verify-api.sh            # 后端 API 回归验证
     ├── verify-albums.sh         # 相册功能回归验证（含级联清理）
     ├── verify-upload.sh         # 上传备份回归验证（自带服务端与独立数据目录）
+    ├── build-release.sh         # 一次产出全部平台的发布包 + SHA256SUMS
+    ├── smoke-test.sh            # 跨平台冒烟测试（可在容器里跑交叉编译产物）
     └── gen-android-icons.py     # 生成 Android 图标与启动图（15 个文件，见下）
 ```
+
+> `dist/` 是 `build-release.sh` 的输出目录（6 个平台包合计约 130 MB），
+> 已在 `.gitignore` 中排除——全部可以从源码重新产出。
 
 ---
 
@@ -412,6 +424,91 @@ SHA-1    80:81:AD:AA:79:16:00:E9:9F:5C:D9:25:7A:69:B2:CB:67:84:8D:45
 
 > adaptive 前景的图形占比必须小于 0.667（108dp 画布只有中心 72dp 保证可见），
 > 脚本里是 `ADAPTIVE_MARK_FRAC`，实测值 0.583。
+
+### 跨平台发布与自启
+
+一条命令产出全部平台的发布包：
+
+```bash
+./scripts/build-release.sh              # 版本号取 git describe --tags --always --dirty
+./scripts/build-release.sh -v 0.2.0     # 或显式指定
+```
+
+产出 6 个归档 + `SHA256SUMS`：
+
+| 目标 | 归档 | 二进制 |
+|:---|:---|:---|
+| `darwin/arm64` | `.tar.gz` | 11 MB |
+| `darwin/amd64` | `.tar.gz` | 12 MB |
+| `linux/amd64` | `.tar.gz` | 12 MB |
+| `linux/arm64` | `.tar.gz` | 11 MB |
+| `windows/amd64` | `.zip` | 12 MB |
+| `android/arm64` | `.zip`（含 APK） | 31 MB |
+
+每个包是一个自洽目录：二进制 + `INSTALL.md` + `service/`（自启脚本）。
+
+**为什么一次就能出全部平台**：`CGO_ENABLED=0`。`modernc.org/sqlite` 是纯 Go 实现、
+不含 cgo，所以交叉编译不需要任何目标平台的工具链或 sysroot。这是当初选
+`modernc.org/sqlite` 而不是 `mattn/go-sqlite3` 换来的直接好处。
+
+**版本号是注入进去的**，不是写死在源码里：
+
+```bash
+go build -ldflags "-s -w -X mediacenter/internal/api.Version=$VERSION"
+```
+
+`api.Version` 因此必须是 `var` 而不是 `const`（`-X` 改不了常量）。
+`build-release.sh` 会在 host 平台真的执行一次 `mediacenter -version` 并断言版本号对得上——
+注入失败是**静默的**（没有报错，只是版本号不对），只有自检能抓到。详见 `DECISIONS.md` D23。
+
+#### 冒烟测试
+
+`scripts/smoke-test.sh` 只依赖 `bash` + `curl`，自己造素材、自己起服务、跑完清理：
+
+```bash
+./scripts/smoke-test.sh ./dist/mediacenter-<v>-darwin-arm64/mediacenter "<v>"
+
+# 交叉编译出来的 Linux 产物用容器跑（容器里现装 curl/bash）
+docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w alpine:latest \
+  sh -c 'apk add --no-cache curl bash >/dev/null && \
+         bash ./scripts/smoke-test.sh ./dist/mediacenter-<v>-linux-amd64/mediacenter "<v>"'
+```
+
+17 项断言覆盖：`-version` 自报 + 版本注入生效 → 建库 → 加目录 → 扫描 → 索引 → 查库，
+外加鉴权（无令牌 401 / 带令牌 200）与 SIGTERM 干净退出。
+
+实测结果：
+
+| 目标 | 执行方式 | 结果 |
+|:---|:---|:---|
+| `darwin/arm64` | 本机原生 | 17/17 |
+| `darwin/amd64` | 本机 Rosetta 2 | 17/17 |
+| `linux/arm64` | alpine 容器，原生 | 17/17 |
+| `linux/amd64` | alpine 容器，QEMU 模拟 | 17/17 |
+| `windows/amd64` | **未执行** | 仅结构校验 |
+
+> Windows 只做了结构校验（`PE32+`、仅依赖 `kernel32.dll`、版本串已内嵌、`.cmd` 纯 ASCII），
+> **没有在真机上运行过**。真要发 Windows 包之前应该先补上这一步。
+
+> 脚本里变量后紧跟中文标点必须写成 `${VAR}`：UTF-8 locale 下 bash 会把多字节字符
+> 吞进变量名，导致 `unbound variable`，而 `LC_ALL=C` 下却正常——是个环境相关的坑。
+> 详见 `DECISIONS.md` D26。跑这些脚本时建议也顺手在 `LC_ALL=en_US.UTF-8` 下过一遍。
+
+#### 开机自启
+
+三个平台的 install / uninstall 脚本都在发布包的 `service/` 下：
+
+| 平台 | 机制 | 安装 |
+|:---|:---|:---|
+| macOS | LaunchAgent（用户级，不需要 root） | `service/install.sh` |
+| Linux | systemd user unit（不需要 root） | `service/install.sh` |
+| Windows | 计划任务 `/SC ONLOGON /RL LIMITED`（不需要提权） | `service\install.cmd` |
+
+三个平台都以 `-scan` 启动：扫描是增量的（size+mtime 未变则跳过），所以开机跑一遍
+代价很低，换来"关机期间放进来的照片开机就能看到"。
+
+端口被占用时**明确报错并以退出码 1 结束，不静默换端口**（用户已经拿到具体 URL 了），
+报错里直接给出换端口写法和查占用者的命令。详见 `DECISIONS.md` D24。
 
 ### 生成测试素材
 

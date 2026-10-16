@@ -13,10 +13,22 @@ import (
 	"mediacenter/internal/meta"
 )
 
-// Version is the API/backend version reported to clients during discovery.
-const Version = "0.1.0"
+// Version is the API/backend version reported to clients during discovery and
+// in the startup banner.
+//
+// It is a var rather than a const so a release build can stamp it in:
+//
+//	go build -ldflags "-X mediacenter/internal/api.Version=0.2.0"
+//
+// Without that, every binary ever built claims to be the same version, and the
+// first question anyone asks about a misbehaving release ("which build are you
+// running?") becomes unanswerable. See scripts/build-release.sh.
+var Version = "0.1.0"
 
 // APIVersion lets a client refuse to talk to an incompatible server.
+//
+// Deliberately NOT injectable: this is a compatibility contract, not a label.
+// It must only change when the wire format actually changes.
 const APIVersion = 1
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {

@@ -554,5 +554,127 @@ apksigner verify --print-certs build/app/outputs/flutter-apk/app-arm64-v8a-relea
 `macos/Runner/Assets.xcassets/AppIcon.appiconset/` 仍是 Flutter 默认，
 尚未替换（macOS 不在 MVP 的分发目标内，见 D10）。
 
+---
+
+## D23. 版本号必须可注入，且构建脚本要自检"注入是否真的落地"
+
+**决策**：`api.Version` 声明为 `var` 而不是 `const`，发布构建用
+`-ldflags "-X mediacenter/internal/api.Version=$VERSION"` 注入；`api.APIVersion`
+保持 `const`。版本号本身由 `git describe --tags --always --dirty` 推导，不手工维护。
+
+**为什么 `Version` 必须是 var**：`-X` 只能改**字符串变量**，改不了常量。只要它是
+`const`，每个构建出来的二进制都会声称自己是同一个版本，而"你跑的是哪个构建？"
+这个排障时第一个要问的问题就永远答不上来。
+
+**为什么 `APIVersion` 刻意不注入**：它是兼容性契约，不是标签。它只在 wire format
+真的变化时才该改，绝不能跟着发布版本号一起漂移——两者的变化节奏完全不同。
+
+**为什么版本号由 git 推导**：手工维护的版本号迟早会和实际代码对不上，而且
+"这个包到底是不是当前代码构建的"在出问题时无从核对。`git describe` 顺带把
+`-dirty` 也带出来，一眼就能看出构建时工作区是否干净。
+
+**自检**：`build-release.sh` 对 **host 平台**会真的执行 `$pkg/$bin -version`，
+并断言输出里含期望版本号。交叉编译的产物在本机跑不起来，所以这一步只对 host 生效——
+但它能立刻抓出"变量名写错 / ldflags 拼错导致注入静默失败"这类问题：这种失败
+**没有任何报错**，只是版本号悄悄不对，靠人看是看不出来的。
+
+`main.go` 的 `-version` 在碰磁盘**之前**打印，所以在数据目录建不出来的机器上也能用
+——而那正是有人想问"这是哪个构建"的场景。
+
+---
+
+## D24. 自启用 `-scan`；三平台各用各的机制，但都不需要 root
+
+**决策**：
+
+| 平台 | 机制 | 关键参数 |
+|:---|:---|:---|
+| macOS | 用户级 LaunchAgent | `RunAtLoad` + `KeepAlive` + `ThrottleInterval=30` |
+| Linux | systemd **user** unit | `systemctl --user enable --now` + `loginctl enable-linger` |
+| Windows | 计划任务 | `/SC ONLOGON /RL LIMITED` |
+
+三平台统一以 `-scan` 启动。
+
+**为什么自启参数是 `-scan`**：扫描器是增量的——`prev.FileSize == size && prev.FileMtime == mtime`
+的文件直接跳过。所以开机跑一遍的实际代价接近"遍历一遍目录树"，换来的是
+"关机期间放进来的照片开机就能看到"。不加 `-scan` 的话，服务运行期间拖进去的文件
+要等下次手动扫描才出现，而这恰恰是最容易让人以为"它坏了"的场景。
+
+**为什么三平台都选用户级那一档**：媒体中心是用户自己的服务，读的是用户自己的照片。
+用系统级机制（LaunchDaemon / system service / `/SC ONSTART`）都要求管理员权限，
+而权限越高、卸载越难、用户越不敢装。Windows 上 `/SC ONSTART` 需要提权，所以用
+`/SC ONLOGON`；Linux 用 user unit 而不是 system unit，是同一个道理。
+
+**两个必须自己踩过才知道的坑**：
+
+1. **自启环境的 PATH 是精简的。** macOS LaunchAgent 的默认 PATH 通常只有
+   `/usr/bin:/bin:/usr/sbin:/sbin`，而 Homebrew 装的 ffmpeg 在 `/opt/homebrew/bin`。
+   不把 PATH 显式写进 plist，就会得到"手动跑一切正常、自启却报未检测到 ffmpeg"
+   ——这种"只有自启才出问题"最难查。所以 plist 和 unit 里都显式设了 PATH。
+2. **Linux 上不要强依赖 `network-online.target`。** 它需要
+   `NetworkManager-wait-online`，很多桌面发行版并没启用，强依赖会让服务**直接起不来**。
+   服务端本身能容忍网络晚到（mDNS 失败只记日志），所以只写 `After=`，不写 `Wants=`。
+
+**端口被占用时：明确报错并退出（码 1），不静默换端口。** 用户已经拿到一个具体 URL
+（手机上可能已经存了），服务悄悄换个端口监听，和"服务坏了"在用户看来没有区别。
+报错里直接给出换端口的写法和查占用者的命令（macOS/Linux `lsof -nP -iTCP:<port> -sTCP:LISTEN`、
+Windows `netstat -ano | findstr :<port>`），因为 `INSTALL.md` 面向的是
+不会自己想到去用这两个命令的人。
+
+**验证程度（诚实标注）**：macOS 的 plist 过了 `plutil -lint` 真实校验，
+install/uninstall 用假 `HOME` + 假 `launchctl` 完整跑通（含 `bootout` → `bootstrap` 顺序）；
+Linux 的 unit 用假 `HOME` + 假 `systemctl` 跑通，并覆盖了 `USER` 未定义的回退路径；
+**Windows 的 `.cmd` 没有执行过**，只做了纯 ASCII 检查与人工审阅。
+
+---
+
+## D25. 不附带 ffmpeg，只做检测与提示
+
+**决策**：发布包只含二进制 + 说明 + 自启脚本，不带 ffmpeg。
+
+**为什么**：
+
+1. **体积**：各平台的 ffmpeg 静态构建普遍在 70–150 MB 量级，而服务端二进制本身
+   只有 11–12 MB。附带会让包体积涨一个数量级。
+2. **授权与平台差异**：各平台 ffmpeg 构建的许可选项不同（GPL / LGPL、是否含
+   libx264 等）。附带等于要替用户做一次许可证选择；不附带则用户从自己系统的包管理器装，
+   合规由发行版负责。
+3. **降级是可控且被明确告知的**：没有 ffmpeg 时，图片依然能索引和显示
+   （缩略图走 Go 标准库），受影响的只有视频缩略图与视频元数据。启动横幅会打印
+   "未检测到 ffmpeg，视频缩略图与元数据将不可用"，`INSTALL.md` 的 FAQ 里有安装指引。
+   **不是静默降级**，这是关键——静默降级才是真正会让人困惑的做法。
+
+**代价**：视频体验需要用户多一步安装。对"自己的私有媒体中心"这个定位可以接受：
+会装这个的人本来就在自己管机器。
+
+---
+
+## D26. 脚本里变量后紧跟中文标点，必须写花括号
+
+**决策**：shell 脚本里凡是 `$VAR` 后面**直接跟非 ASCII 字符**（中文标点、全角括号等）
+的地方，一律写成 `${VAR}`。
+
+**为什么**：bash 判断变量名在哪里结束，用的是**当前 locale**。在 UTF-8 locale 下，
+多字节字符的高位字节会被当作标识符字符，于是：
+
+```bash
+got="hello"; echo "（$got）"      # UTF-8 locale：变量名被解析成 "got）" → unbound variable
+got="hello"; echo "（${got}）"    # C locale / UTF-8 locale 都对
+```
+
+而 `LC_ALL=C` 下同一行完全正常。**这让 bug 变成了环境相关的**：本机 `LANG` 没设时全绿，
+换到一台正常用户机器（UTF-8）就报 `unbound variable`——而"面向用户的脚本在 UTF-8 下崩"
+等于在绝大多数真实机器上都是崩的。
+
+**发现过程**：`build-release.sh` 在同一台机器上前两次跑通、第三次崩在
+`自检 OK（$got）` 这一行，两次唯一的差别是运行环境的 locale。
+这个 bug 当时潜伏在所有面向用户输出中文的脚本里，本次共修掉 **22 处、涉及 4 个脚本**
+（`build-release.sh`、`smoke-test.sh`、`verify-albums.sh`、`verify-upload.sh`，
+以及 Linux 的 `install.sh`）。
+
+**回归防线**：修完之后，构建脚本与冒烟测试都在 `LC_ALL=en_US.UTF-8` 下**重跑了一遍**。
+注意 `bash -n` 查不出这个问题——它是运行时错误，语法检查会通过。
+扫描残留用 `grep -nP '\$[A-Za-z0-9_?#]+[^\x00-\x7F]'`（BSD grep 不支持 `-P`，要用 ripgrep）。
+
 
 

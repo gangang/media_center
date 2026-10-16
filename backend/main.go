@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -32,7 +33,16 @@ func main() {
 	port := flag.Int("port", 0, "listen port (default 8080)")
 	scan := flag.Bool("scan", false, "run a full index pass on startup, then keep serving")
 	mdns := flag.Bool("mdns", true, "advertise this server on the LAN over mDNS")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	// Printed before anything else touches the disk, so this works on a machine
+	// where the data directory cannot be created — which is exactly the
+	// situation where someone is asking "which build is this?".
+	if *showVersion {
+		fmt.Printf("mediacenter %s (api %d)\n", api.Version, api.APIVersion)
+		return
+	}
 
 	cfg, err := config.Load(*dataDir, *host, *port)
 	if err != nil {
@@ -79,7 +89,24 @@ func main() {
 	// crash once they have already copied the URL onto their phone.
 	ln, err := net.Listen("tcp", cfg.Addr())
 	if err != nil {
-		log.Fatalf("listen %s: %v", cfg.Addr(), err)
+		// "address already in use" is the overwhelmingly common failure here, and
+		// the one case where the raw error leaves the user stuck: it names the
+		// symptom but not the fix. Spell out both the workaround and the command
+		// that finds the culprit, because INSTALL.md is written for people who
+		// will not reach for lsof or netstat on their own.
+		//
+		// We deliberately do NOT fall back to another port. The user has already
+		// been given a specific URL (and the phone may already have it saved), so
+		// a server quietly listening somewhere else is indistinguishable from a
+		// server that is simply broken.
+		if errors.Is(err, syscall.EADDRINUSE) {
+			log.Fatalf("端口 %d 已被占用，无法启动。\n"+
+				"  换个端口启动： mediacenter -port 8081\n"+
+				"  查看谁在占用： macOS/Linux  lsof -nP -iTCP:%d -sTCP:LISTEN\n"+
+				"                 Windows      netstat -ano | findstr :%d\n"+
+				"  原始错误：%v", cfg.Port, cfg.Port, cfg.Port, err)
+		}
+		log.Fatalf("监听 %s 失败：%v", cfg.Addr(), err)
 	}
 	defer ln.Close()
 

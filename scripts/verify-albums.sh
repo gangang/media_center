@@ -190,7 +190,7 @@ BEFORE=$(curl -s -H "$AUTH" "$BASE/api/stats" | jq_ 'd["photos"]+d["videos"]')
 chk "DELETE 相册 -> 200" 200 "$(code -X DELETE -H "$AUTH" "$BASE/api/albums/$ID")"
 chk "删除后 GET -> 404" 404 "$(code -H "$AUTH" "$BASE/api/albums/$ID")"
 AFTER=$(curl -s -H "$AUTH" "$BASE/api/stats" | jq_ 'd["photos"]+d["videos"]')
-chk "媒体总数不变（$BEFORE -> $AFTER）" "$BEFORE" "$AFTER"
+chk "媒体总数不变（$BEFORE -> ${AFTER}）" "$BEFORE" "$AFTER"
 chk "原媒体仍可访问 -> 200" 200 "$(code -H "$AUTH" "$BASE/api/media/$M1")"
 chk "原文件仍可播放 -> 200" 200 "$(code -I -H "$AUTH" "$BASE/api/media/$M3/original")"
 chk "媒体不再属于任何相册" "0" "$(curl -s -H "$AUTH" "$BASE/api/media/$M1/albums" | jq_ 'len(d["items"])')"
@@ -202,7 +202,7 @@ echo "=============================================================="
 CASCADE_FILE="${MC_CASCADE_FILE:-/tmp/mc-test-media/photos/IMG_0001.jpg}"
 PARK="/tmp/mc-parked"
 if [ ! -f "$CASCADE_FILE" ]; then
-  echo "  跳过：找不到 $CASCADE_FILE（先跑 scripts/make-test-media.sh，或设置 MC_CASCADE_FILE）"
+  echo "  跳过：找不到 ${CASCADE_FILE}（先跑 scripts/make-test-media.sh，或设置 MC_CASCADE_FILE）"
 else
   mkdir -p "$PARK"
   MID=$(curl -s -H "$AUTH" "$BASE/api/media?page_size=200" | media_id_of "$(basename "$CASCADE_FILE")")
@@ -230,7 +230,7 @@ else
     curl -s -o /dev/null -X POST -H "$AUTH" -H "$J" -d '{}' "$BASE/api/scan/start"
     wait_scan || echo "  (扫描等待超时)"
     NEWID=$(curl -s -H "$AUTH" "$BASE/api/media?page_size=200" | media_id_of "$(basename "$CASCADE_FILE")")
-    echo "  还原后 id = $NEWID（原 id = $MID）"
+    echo "  还原后 id = ${NEWID}（原 id = ${MID}）"
     chk "文件重新入库" "$NEWID" "$(echo "$NEWID" | grep -qE '^[0-9]+$' && echo "$NEWID" || echo MISSING)"
     # 这是有意的取舍：成员关系跟着 media 行走，行没了关系就没了。
     chk "相册成员关系未自动恢复（已知取舍）" "0" "$(curl -s -H "$AUTH" "$BASE/api/albums/$AID" | jq_ 'd["item_count"]')"

@@ -123,7 +123,7 @@ echo "    photo.jpg  $PSIZE 字节"
 echo "    photo2.jpg $P2SIZE 字节"
 echo "    clip.mp4   $VSIZE 字节"
 
-echo "==> 启动服务端（数据目录 $DATA）"
+echo "==> 启动服务端（数据目录 ${DATA}）"
 "$BIN" -data "$DATA" -port "$PORT" -mdns=false >"$SERVER_LOG" 2>&1 &
 SRV_PID=$!
 

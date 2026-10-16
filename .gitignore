@@ -10,6 +10,10 @@ mediacenter
 *.dll
 *.exe
 
+# scripts/build-release.sh 的输出目录：6 个平台包加起来 ~130MB，
+# 全部可以从源码重新产出，没有理由进版本库（校验和随 Release 附件一起发布）。
+dist/
+
 # ==== 客户端（Flutter / Dart）====
 
 # 构建与缓存。这两项在本机会占到 ~2GB，但都是可重新生成的产物。
