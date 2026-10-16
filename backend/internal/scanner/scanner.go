@@ -269,17 +269,44 @@ func (s *Scanner) processFile(path string, size int64, mod time.Time, folderID i
 		}
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
-	mimeType, isPhoto := photoExt[ext]
-	mediaType := "photo"
-	if !isPhoto {
-		mimeType = videoExt[ext]
-		mediaType = "video"
+	mf, err := s.buildMediaFile(path, size, mod, folderID, store.OriginScan)
+	if err != nil {
+		return outcome{err: err.Error()}
+	}
+	return outcome{mf: mf}
+}
+
+// MediaTypeForName classifies a file by extension.
+//
+// It consults the very same tables the folder walk uses, so the upload API
+// accepts exactly the formats the indexer knows how to read — no more and no
+// less. A file accepted here is guaranteed to be indexable later.
+func MediaTypeForName(name string) (mimeType, mediaType string, ok bool) {
+	ext := strings.ToLower(filepath.Ext(name))
+	if m, isPhoto := photoExt[ext]; isPhoto {
+		return m, "photo", true
+	}
+	if m, isVideo := videoExt[ext]; isVideo {
+		return m, "video", true
+	}
+	return "", "", false
+}
+
+// buildMediaFile does the expensive per-file work: identify, hash, read
+// metadata and render a thumbnail.
+//
+// It is shared by the folder walk and by the upload API. Keeping one
+// implementation is what makes an uploaded photo indistinguishable from a
+// scanned one afterwards: same hash, same EXIF handling, same thumbnails.
+func (s *Scanner) buildMediaFile(path string, size int64, mod time.Time, folderID int64, origin string) (*store.MediaFile, error) {
+	mimeType, mediaType, ok := MediaTypeForName(path)
+	if !ok {
+		return nil, fmt.Errorf("unsupported media type: %s", filepath.Base(path))
 	}
 
 	hash, err := quickHash(path, size)
 	if err != nil {
-		return outcome{err: fmt.Sprintf("hash %s: %v", path, err)}
+		return nil, fmt.Errorf("hash %s: %v", path, err)
 	}
 
 	mf := &store.MediaFile{
@@ -287,14 +314,15 @@ func (s *Scanner) processFile(path string, size int64, mod time.Time, folderID i
 		ContentHash:  hash,
 		FileName:     filepath.Base(path),
 		FileSize:     size,
-		FileMtime:    mtime,
+		FileMtime:    mod.Unix(),
 		MimeType:     mimeType,
 		MediaType:    mediaType,
 		IndexedAt:    nowISO(),
 		ScanFolderID: folderID,
+		Origin:       origin,
 	}
 
-	if isPhoto {
+	if mediaType == "photo" {
 		s.readPhotoMeta(mf, path)
 	} else {
 		s.readVideoMeta(mf, path)
@@ -317,7 +345,33 @@ func (s *Scanner) processFile(path string, size int64, mod time.Time, folderID i
 		mf.ThumbnailPath = thumbPath
 	}
 
-	return outcome{mf: mf}
+	return mf, nil
+}
+
+// IndexFile indexes a single file the server itself placed on disk.
+//
+// This is the upload API's entry point into the indexing pipeline. The returned
+// row already carries its database id, so a client that just finished an upload
+// can be handed a fully formed media item without waiting for the next scan.
+func (s *Scanner) IndexFile(path string, folderID int64, origin string) (*store.MediaFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory", path)
+	}
+
+	mf, err := s.buildMediaFile(path, info.Size(), info.ModTime(), folderID, origin)
+	if err != nil {
+		return nil, err
+	}
+	id, err := s.st.UpsertMedia(mf)
+	if err != nil {
+		return nil, err
+	}
+	mf.ID = id
+	return mf, nil
 }
 
 func (s *Scanner) readPhotoMeta(mf *store.MediaFile, path string) {
@@ -486,6 +540,15 @@ func (s *Scanner) fail(msg string) {
 	s.mu.Unlock()
 	log.Printf("scan: %s", msg)
 }
+
+// ContentHash derives the server's file identity: sha256 over the file size
+// followed by its first and last 256 KiB.
+//
+// A client that computes the same digest can ask for an instant upload, because
+// the server then recognises bytes it already holds without receiving them. The
+// algorithm is exported as a single function precisely so the two sides cannot
+// quietly drift apart and silently lose the optimisation.
+func ContentHash(path string, size int64) (string, error) { return quickHash(path, size) }
 
 // quickHash derives a stable identity from the file size plus its first and
 // last 256 KiB. Hashing a whole 4 GB video would dominate scan time, while a

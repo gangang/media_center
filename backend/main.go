@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +44,22 @@ func main() {
 		log.Fatalf("index: %v", err)
 	}
 	defer st.Close()
+
+	// The managed library is where the phone backup API writes. Registering it
+	// as a scan folder is what makes an upload reach the gallery through the
+	// same indexing path as any other file — and what makes a photo deleted
+	// from the library get pruned like any other.
+	if _, err := st.AddFolder(cfg.LibraryDir()); err != nil {
+		log.Printf("library folder: %v", err)
+	}
+
+	// A client that crashed mid-transfer left a partially written file behind.
+	// Nothing in the UI would show it, so it would simply consume space forever.
+	if n, err := sweepStaleUploads(cfg, st); err != nil {
+		log.Printf("upload sweep: %v", err)
+	} else if n > 0 {
+		log.Printf("  清理     : 移除 %d 个未完成的上传会话", n)
+	}
 
 	sc := scanner.New(cfg, st)
 	srv := api.NewServer(cfg, st, sc)
@@ -115,6 +132,32 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+// sweepStaleUploads removes upload sessions left behind by a client that
+// crashed or went away, together with their partially written files.
+//
+// Only paths inside the upload temp directory are ever unlinked. The paths come
+// out of our own database, but this is a delete loop, and a delete loop that
+// trusts its input is how a bug becomes data loss.
+func sweepStaleUploads(cfg *config.Config, st *store.Store) (int, error) {
+	cutoff := time.Now().UTC().Add(-api.UploadSessionTTL).Format(time.RFC3339)
+	paths, err := st.DeleteStaleUploads(cutoff)
+	if err != nil {
+		return 0, err
+	}
+
+	tempDir := cfg.UploadTempDir() + string(os.PathSeparator)
+	for _, p := range paths {
+		if !strings.HasPrefix(p, tempDir) {
+			log.Printf("upload sweep: 跳过可疑路径 %s", p)
+			continue
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			log.Printf("upload sweep: 无法删除 %s: %v", p, err)
+		}
+	}
+	return len(paths), nil
 }
 
 // printBanner tells the user exactly how to reach the server, including the

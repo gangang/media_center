@@ -89,6 +89,12 @@ func Load(dataDir, host string, port int) (*Config, error) {
 	if err := os.MkdirAll(cfg.ThumbDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("create thumbnail dir: %w", err)
 	}
+	if err := os.MkdirAll(cfg.LibraryDir(), 0o755); err != nil {
+		return nil, fmt.Errorf("create library dir: %w", err)
+	}
+	if err := os.MkdirAll(cfg.UploadTempDir(), 0o755); err != nil {
+		return nil, fmt.Errorf("create upload temp dir: %w", err)
+	}
 	if err := cfg.Save(); err != nil {
 		return nil, err
 	}
@@ -113,6 +119,19 @@ func (c *Config) DBPath() string { return filepath.Join(c.DataDir, "index.db") }
 
 // ThumbDir is the root of the thumbnail cache.
 func (c *Config) ThumbDir() string { return filepath.Join(c.DataDir, "thumbs") }
+
+// LibraryDir is where files uploaded through the backup API are stored.
+//
+// The server owns this directory. It is created at startup and registered as a
+// scan folder, so an upload reaches the gallery through exactly the same
+// indexing path as a file the user dropped in by hand — one code path, one set
+// of metadata rules, one pruning rule.
+func (c *Config) LibraryDir() string { return filepath.Join(c.DataDir, "library") }
+
+// UploadTempDir holds partially received uploads. It sits next to the library
+// rather than inside it so a half-written file is never visible to the scanner
+// and never mistaken for media.
+func (c *Config) UploadTempDir() string { return filepath.Join(c.DataDir, "uploads") }
 
 // Addr is the listen address in host:port form.
 func (c *Config) Addr() string { return net.JoinHostPort(c.Host, fmt.Sprintf("%d", c.Port)) }

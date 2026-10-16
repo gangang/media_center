@@ -54,6 +54,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/albums/{id}/media", s.handleListAlbumMedia)
 	s.mux.HandleFunc("POST /api/albums/{id}/media", s.handleAddAlbumMedia)
 	s.mux.HandleFunc("DELETE /api/albums/{id}/media", s.handleRemoveAlbumMedia)
+
+	// Phone backup. The transfer is split into chunks so an interrupted upload
+	// resumes instead of restarting.
+	s.mux.HandleFunc("POST /api/uploads", s.handleCreateUpload)
+	s.mux.HandleFunc("GET /api/uploads/{id}", s.handleGetUpload)
+	s.mux.HandleFunc("PUT /api/uploads/{id}/chunks/{index}", s.handleUploadChunk)
+	s.mux.HandleFunc("POST /api/uploads/{id}/complete", s.handleCompleteUpload)
+	s.mux.HandleFunc("DELETE /api/uploads/{id}", s.handleCancelUpload)
 }
 
 // Handler returns the full middleware chain. Authentication wraps the mux so

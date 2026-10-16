@@ -28,6 +28,9 @@ type mediaDTO struct {
 	AudioCodec   string `json:"audio_codec,omitempty"`
 	ThumbnailURL string `json:"thumbnail_url"`
 	OriginalURL  string `json:"original_url"`
+	// Origin is "scan" or "upload", so a client can show where a file came from
+	// without a second request.
+	Origin string `json:"origin"`
 }
 
 func toDTO(m store.MediaFile) mediaDTO {
@@ -45,6 +48,7 @@ func toDTO(m store.MediaFile) mediaDTO {
 		AudioCodec:   m.AudioCodec,
 		ThumbnailURL: fmt.Sprintf("/api/media/%d/thumbnail", m.ID),
 		OriginalURL:  fmt.Sprintf("/api/media/%d/original", m.ID),
+		Origin:       m.Origin,
 	}
 }
 
@@ -58,6 +62,7 @@ func (s *Server) handleListMedia(w http.ResponseWriter, r *http.Request) {
 		Query:    q.Get("q"),
 		From:     q.Get("from"),
 		To:       q.Get("to"),
+		Origin:   q.Get("origin"),
 	}
 
 	res, err := s.st.ListMedia(p)

@@ -39,6 +39,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"videos":            st.Videos,
 		"total_bytes":       st.TotalBytes,
 		"folders":           st.Folders,
+		"uploaded":          st.Uploaded,
 		"scan":              s.sc.Status(),
 		"ffmpeg_available":  meta.HasTool(s.cfg.FFmpeg),
 		"ffprobe_available": meta.HasTool(s.cfg.FFprobe),
@@ -114,6 +115,15 @@ func (s *Server) handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid folder id")
 		return
 	}
+
+	// The library folder is where the backup API writes. Removing it would not
+	// delete a single photo, but it would quietly stop every future upload from
+	// reaching the index — a failure that looks like data loss and is not.
+	if libID, err := s.st.FolderIDByPath(s.cfg.LibraryDir()); err == nil && libID == id {
+		writeErr(w, http.StatusConflict, "媒体库目录由手机备份功能使用，不能移除")
+		return
+	}
+
 	if err := s.st.DeleteFolder(id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

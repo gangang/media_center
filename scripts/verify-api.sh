@@ -144,9 +144,16 @@ if [ -n "$VID" ]; then
   echo "$CR" | grep -q "bytes 0-99/" && note "Content-Range 格式正确" 1 || note "Content-Range 异常" 0
 
   # 分段拉取拼接后必须与整体字节一致——这条能抓出 Range 边界错位
+  #
+  # 切分点必须由实际文件大小推导：早先这里硬编码 2500000，而列表里排在最前的
+  # 视频（无 creation_time、回落到文件时间）只有 768KB，于是第二段请求直接越界
+  # 返回 416，拼接结果必然不一致——一条永远失败的断言等于没有断言。
+  VSZ=$(curl -s -o /dev/null -w '%{size_download}' -H "$AUTH" "$U")
+  SPLIT=$((VSZ / 2))
+  echo "  视频字节数: $VSZ  切分点: $SPLIT"
   FULL_SHA=$(curl -s -H "$AUTH" "$U" | shasum -a 256 | cut -d' ' -f1)
   TMP=$(mktemp)
-  { curl -s -H "$AUTH" -H 'Range: bytes=0-2499999' "$U"; curl -s -H "$AUTH" -H 'Range: bytes=2500000-' "$U"; } > "$TMP"
+  { curl -s -H "$AUTH" -H "Range: bytes=0-$((SPLIT-1))" "$U"; curl -s -H "$AUTH" -H "Range: bytes=$SPLIT-" "$U"; } > "$TMP"
   STITCH_SHA=$(shasum -a 256 "$TMP" | cut -d' ' -f1)
   rm -f "$TMP"
   echo "  整体 sha256:     $FULL_SHA"

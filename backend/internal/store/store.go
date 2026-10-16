@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     video_codec    TEXT,
     audio_codec    TEXT,
     thumbnail_path TEXT,
-    scan_folder_id INTEGER REFERENCES scan_folders(id) ON DELETE CASCADE
+    scan_folder_id INTEGER REFERENCES scan_folders(id) ON DELETE CASCADE,
+    origin         TEXT    NOT NULL DEFAULT 'scan'
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_taken_at ON media_files(taken_at DESC);
@@ -74,7 +75,61 @@ CREATE TABLE IF NOT EXISTS album_items (
 
 CREATE INDEX IF NOT EXISTS idx_album_items_media ON album_items(media_id);
 CREATE INDEX IF NOT EXISTS idx_album_items_album ON album_items(album_id, added_at);
+
+-- Upload sessions. A phone backup is split into fixed size chunks so a dropped
+-- Wi-Fi connection resumes from where it stopped instead of restarting a 4 GB
+-- video. A row exists only for the duration of the transfer; once the file is
+-- assembled and indexed the session is kept around just long enough for the
+-- client to read back the resulting media id.
+CREATE TABLE IF NOT EXISTS uploads (
+    id              TEXT    PRIMARY KEY,
+    file_name       TEXT    NOT NULL,
+    content_hash    TEXT    NOT NULL DEFAULT '',
+    total_size      INTEGER NOT NULL,
+    chunk_size      INTEGER NOT NULL,
+    chunk_count     INTEGER NOT NULL,
+    received_chunks INTEGER NOT NULL DEFAULT 0,
+    media_type      TEXT    NOT NULL DEFAULT '',
+    -- Resolved when the upload completes. The name is claimed only at that
+    -- point, with an exclusive create, so two phones backing up the same camera
+    -- filename can never overwrite each other.
+    target_path     TEXT    NOT NULL DEFAULT '',
+    temp_path       TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    media_id        INTEGER REFERENCES media_files(id) ON DELETE SET NULL,
+    dedup           INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_uploads_hash   ON uploads(content_hash);
+
+-- One row per chunk that actually arrived. Tracking them individually is what
+-- lets a resumed upload learn exactly which pieces are still missing, rather
+-- than trusting a counter that could drift after a retry.
+CREATE TABLE IF NOT EXISTS upload_chunks (
+    upload_id   TEXT    NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    size        INTEGER NOT NULL,
+    received_at TEXT    NOT NULL,
+    PRIMARY KEY (upload_id, chunk_index)
+);
 `
+
+// postSchema runs after the column migrations, so it may safely reference
+// columns that only exist on databases upgraded from an earlier release.
+const postSchema = `
+CREATE INDEX IF NOT EXISTS idx_media_origin ON media_files(origin);
+`
+
+// Origin values recorded in media_files.origin.
+const (
+	// OriginScan marks a file the scanner found in a user configured folder.
+	OriginScan = "scan"
+	// OriginUpload marks a file the server itself wrote, i.e. a phone backup.
+	OriginUpload = "upload"
+)
 
 // MediaFile mirrors one row of media_files.
 type MediaFile struct {
@@ -95,6 +150,9 @@ type MediaFile struct {
 	AudioCodec    string `json:"audio_codec"`
 	ThumbnailPath string `json:"thumbnail_path"`
 	ScanFolderID  int64  `json:"scan_folder_id"`
+	// Origin is OriginScan or OriginUpload. It is set once, when the row is
+	// first created, and never rewritten.
+	Origin string `json:"origin"`
 }
 
 // ScanFolder mirrors one row of scan_folders.
@@ -115,6 +173,7 @@ type ListParams struct {
 	Query    string
 	From     string
 	To       string
+	Origin   string // OriginScan, OriginUpload or "" for both
 }
 
 // ListResult is a page of media plus the total row count.
@@ -131,6 +190,9 @@ type Stats struct {
 	Videos     int64 `json:"videos"`
 	TotalBytes int64 `json:"total_bytes"`
 	Folders    int64 `json:"folders"`
+	// Uploaded counts media that arrived through the backup API rather than
+	// from a scan folder.
+	Uploaded int64 `json:"uploaded"`
 }
 
 // Store wraps the database handle.
@@ -173,14 +235,93 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate() error {
-	for _, stmt := range strings.Split(schema, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		if _, err := s.db.Exec(stmt); err != nil {
+	if err := execStatements(s.db, schema); err != nil {
+		return err
+	}
+	// CREATE TABLE IF NOT EXISTS never touches a table that already exists, so
+	// a column introduced after the first release needs an explicit ALTER.
+	// Every step below is a no-op once it has been applied.
+	if err := s.ensureColumn("media_files", "origin", "TEXT NOT NULL DEFAULT 'scan'"); err != nil {
+		return err
+	}
+	return execStatements(s.db, postSchema)
+}
+
+// execStatements runs a semicolon separated script, one statement at a time.
+func execStatements(db *sql.DB, script string) error {
+	for _, stmt := range splitStatements(script) {
+		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("migrate: %w\nstatement: %s", err, stmt)
 		}
+	}
+	return nil
+}
+
+// splitStatements breaks a script into individual statements.
+//
+// Line comments are removed before splitting. A naive split on ";" tears a
+// statement in half the moment a comment happens to contain a semicolon — a
+// bug that stays invisible until someone writes an ordinary English sentence in
+// the wrong place, and then breaks startup for every existing install.
+func splitStatements(script string) []string {
+	var kept []string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+
+	var stmts []string
+	for _, chunk := range strings.Split(strings.Join(kept, "\n"), ";") {
+		if s := strings.TrimSpace(chunk); s != "" {
+			stmts = append(stmts, s)
+		}
+	}
+	return stmts
+}
+
+// ensureColumn adds a column when the table exists without it. It is how the
+// schema evolves in place, without a migration framework and without ever
+// dropping user data.
+//
+// table, column and decl are internal constants, never user input.
+func (s *Store) ensureColumn(table, column, decl string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", table, err)
+	}
+
+	found := false
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notNull int
+			dflt    any
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	// Close before writing: the open cursor would otherwise hold a connection.
+	rows.Close()
+
+	if found {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -269,13 +410,28 @@ func (s *Store) MarkFolderScanned(id int64, ts string) error {
 	return err
 }
 
+// FolderIDByPath returns the id of a registered folder, or 0 when the path is
+// not configured. The upload API uses it to attach an incoming file to the
+// managed library folder.
+func (s *Store) FolderIDByPath(path string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM scan_folders WHERE path = ?`, path).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 // ------------------------------------------------------------------ media --
 
 const mediaColumns = `id, file_path, COALESCE(content_hash,''), file_name, file_size,
 	COALESCE(file_mtime,0), COALESCE(mime_type,''), media_type, COALESCE(taken_at,''),
 	indexed_at, COALESCE(width,0), COALESCE(height,0), COALESCE(duration_ms,0),
 	COALESCE(video_codec,''), COALESCE(audio_codec,''), COALESCE(thumbnail_path,''),
-	COALESCE(scan_folder_id,0)`
+	COALESCE(scan_folder_id,0), COALESCE(origin,'scan')`
 
 func scanMedia(row interface{ Scan(...any) error }) (MediaFile, error) {
 	var m MediaFile
@@ -284,7 +440,7 @@ func scanMedia(row interface{ Scan(...any) error }) (MediaFile, error) {
 		&m.FileMtime, &m.MimeType, &m.MediaType, &m.TakenAt,
 		&m.IndexedAt, &m.Width, &m.Height, &m.DurationMs,
 		&m.VideoCodec, &m.AudioCodec, &m.ThumbnailPath,
-		&m.ScanFolderID,
+		&m.ScanFolderID, &m.Origin,
 	)
 	return m, err
 }
@@ -292,14 +448,19 @@ func scanMedia(row interface{ Scan(...any) error }) (MediaFile, error) {
 // UpsertMedia inserts a freshly indexed file, or refreshes the row if the same
 // path was already known. file_path is the conflict target, which keeps
 // re-scans idempotent.
+//
+// origin is written on insert only. A file that arrived through the upload API
+// lives inside the managed library folder, which the scanner also walks; if the
+// update refreshed origin too, the next scan would relabel it as "scan" and the
+// upload/scan distinction would quietly disappear.
 func (s *Store) UpsertMedia(m *MediaFile) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(
 		`INSERT INTO media_files (
 		     file_path, content_hash, file_name, file_size, file_mtime, mime_type,
 		     media_type, taken_at, indexed_at, width, height, duration_ms,
-		     video_codec, audio_codec, thumbnail_path, scan_folder_id)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		     video_codec, audio_codec, thumbnail_path, scan_folder_id, origin)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(file_path) DO UPDATE SET
 		     content_hash   = excluded.content_hash,
 		     file_name      = excluded.file_name,
@@ -320,12 +481,21 @@ func (s *Store) UpsertMedia(m *MediaFile) (int64, error) {
 		m.FilePath, m.ContentHash, m.FileName, m.FileSize, m.FileMtime, m.MimeType,
 		m.MediaType, nullStr(m.TakenAt), m.IndexedAt, nullInt(m.Width), nullInt(m.Height),
 		nullInt64(m.DurationMs), nullStr(m.VideoCodec), nullStr(m.AudioCodec),
-		nullStr(m.ThumbnailPath), nullInt64(m.ScanFolderID),
+		nullStr(m.ThumbnailPath), nullInt64(m.ScanFolderID), originOrDefault(m.Origin),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("upsert media: %w", err)
 	}
 	return id, nil
+}
+
+// originOrDefault maps the zero value to OriginScan so callers that do not care
+// about provenance still write a valid, indexed value.
+func originOrDefault(origin string) string {
+	if origin == "" {
+		return OriginScan
+	}
+	return origin
 }
 
 // GetMediaByPath looks up a single row by absolute path. Used by the scanner
@@ -390,6 +560,11 @@ func (s *Store) ListMedia(p ListParams) (*ListResult, error) {
 	case "photo", "video":
 		where = append(where, "media_type = ?")
 		args = append(args, p.Type)
+	}
+	switch p.Origin {
+	case OriginScan, OriginUpload:
+		where = append(where, "COALESCE(origin,'scan') = ?")
+		args = append(args, p.Origin)
 	}
 	if p.Query != "" {
 		where = append(where, "file_name LIKE ?")
@@ -500,9 +675,10 @@ func (s *Store) Stats() (*Stats, error) {
 	row := s.db.QueryRow(`SELECT
 		COALESCE(SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(file_size), 0)
+		COALESCE(SUM(file_size), 0),
+		COALESCE(SUM(CASE WHEN COALESCE(origin,'scan') = 'upload' THEN 1 ELSE 0 END), 0)
 		FROM media_files`)
-	if err := row.Scan(&out.Photos, &out.Videos, &out.TotalBytes); err != nil {
+	if err := row.Scan(&out.Photos, &out.Videos, &out.TotalBytes, &out.Uploaded); err != nil {
 		return nil, err
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scan_folders`).Scan(&out.Folders); err != nil {
