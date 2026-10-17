@@ -15,7 +15,9 @@
 #
 # G 段（级联）需要一个真实文件做「移出扫描目录」实验，默认用
 # /tmp/mc-test-media/photos/IMG_0001.jpg（由 scripts/make-test-media.sh 生成）。
-# 找不到该文件时 G 段会被跳过，而不是报失败。可用 MC_CASCADE_FILE 覆盖路径。
+# 找不到该文件、或它不落在本服务的扫描目录内时，G 段会被跳过而不是报失败——
+# 这两种情况下实验前提不成立，硬跑只会得到看起来像功能坏了的假失败。
+# 可用 MC_CASCADE_FILE 覆盖路径（建议直接指向扫描目录里的文件）。
 
 set -u
 
@@ -72,6 +74,17 @@ want = os.environ["NAME"]
 for i in json.load(sys.stdin)["items"]:
     if i["file_name"] == want:
         print(i["id"]); break'; }
+
+# 判断某个绝对路径是否落在任一扫描目录之内。
+# G 段要做的是「把文件移出扫描目录 → 重扫 → 索引条目被移除」，
+# 这个前提不成立时实验毫无意义，必须跳过而不是硬跑。
+in_scanned_folder() { FILE="$1" python3 -c '
+import sys, json, os
+f = os.path.realpath(os.environ["FILE"])
+for it in json.load(sys.stdin).get("items", []):
+    root = os.path.realpath(it["path"])
+    if f == root or f.startswith(root + os.sep):
+        print("yes"); break'; }
 
 wait_scan() {
   for _ in $(seq 1 60); do
@@ -203,6 +216,13 @@ CASCADE_FILE="${MC_CASCADE_FILE:-/tmp/mc-test-media/photos/IMG_0001.jpg}"
 PARK="/tmp/mc-parked"
 if [ ! -f "$CASCADE_FILE" ]; then
   echo "  跳过：找不到 ${CASCADE_FILE}（先跑 scripts/make-test-media.sh，或设置 MC_CASCADE_FILE）"
+elif [ "$(curl -s -H "$AUTH" "$BASE/api/folders" | in_scanned_folder "$CASCADE_FILE")" != "yes" ]; then
+  # 常见误用：默认路径的文件和扫描目录里的某个文件同名。media_id_of 只按文件名匹配，
+  # 会命中扫描目录里的那个，于是脚本拿着 A 的 id、去 mv 目录外的 B，
+  # 重扫自然什么都删不掉，最后给出 4 条「级联没生效」的假失败。
+  echo "  跳过：${CASCADE_FILE} 不在本服务的任何扫描目录内"
+  echo "        移出它不会触发索引移除，这个实验不成立。"
+  echo "        用 MC_CASCADE_FILE 指向某个扫描目录里的真实文件后重跑。"
 else
   mkdir -p "$PARK"
   MID=$(curl -s -H "$AUTH" "$BASE/api/media?page_size=200" | media_id_of "$(basename "$CASCADE_FILE")")
