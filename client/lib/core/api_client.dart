@@ -251,6 +251,28 @@ class ApiClient {
     await _deleteJson('/api/folders/$id');
   }
 
+  /// 改名，或（带 [folderId] 时）移动到另一个已注册目录。
+  ///
+  /// 服务端是原地更新那一行索引，媒体 id 不变——所以相册成员关系不会丢。
+  /// 返回更新后的条目；目录里已有同名文件时服务端会自动追加 " (1)"，
+  /// 文件名以返回值为准（[MediaItem.fileName] 与调用方传入的可能不同）。
+  Future<MediaItem> renameMedia(int id, {String? name, int? folderId}) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (folderId != null) body['folder_id'] = folderId;
+    final json = await _patchJson('/api/media/$id', body);
+    return MediaItem.fromJson(json['item'] as Map<String, dynamic>);
+  }
+
+  /// 批量移动。部分失败是正常结果，由调用方决定怎么提示。
+  Future<MoveResult> moveMedia(List<int> ids, int folderId) async {
+    final json = await _postJson('/api/media/move', {
+      'ids': ids,
+      'folder_id': folderId,
+    });
+    return MoveResult.fromJson(json);
+  }
+
   Future<void> startScan({int folderId = 0}) =>
       _postJson('/api/scan/start', {'folder_id': folderId});
 

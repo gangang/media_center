@@ -333,6 +333,52 @@ class ServerBrowse {
       );
 }
 
+/// 批量移动里单项的结果。
+class MoveOutcome {
+  const MoveOutcome({
+    required this.id,
+    required this.ok,
+    this.path = '',
+    this.error = '',
+  });
+
+  final int id;
+  final bool ok;
+  final String path;
+  final String error;
+}
+
+/// `POST /api/media/move` 的响应。
+///
+/// 部分失败是正常形态而不是异常：三个文件里有一个在刚被拔掉的外接盘上，
+/// 就该是"两个成功、一个失败并说明原因"。整批回滚会让用户以为什么都没发生，
+/// 然后原样重试再失败一遍。
+class MoveResult {
+  const MoveResult({
+    required this.moved,
+    required this.failed,
+    required this.results,
+  });
+
+  final int moved;
+  final int failed;
+  final List<MoveOutcome> results;
+
+  factory MoveResult.fromJson(Map<String, dynamic> j) => MoveResult(
+        moved: (j['moved'] as num?)?.toInt() ?? 0,
+        failed: (j['failed'] as num?)?.toInt() ?? 0,
+        results: ((j['results'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((r) => MoveOutcome(
+                  id: (r['id'] as num?)?.toInt() ?? 0,
+                  ok: (r['ok'] as bool?) ?? false,
+                  path: (r['path'] as String?) ?? '',
+                  error: (r['error'] as String?) ?? '',
+                ))
+            .toList(growable: false),
+      );
+}
+
 /// 相册。
 ///
 /// [itemCount] 与 [coverUrl] 由后端推导（封面取相册内最早加入的一项），

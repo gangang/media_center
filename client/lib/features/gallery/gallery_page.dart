@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import '../../core/api_client.dart';
 import '../../core/media_pager.dart';
 import '../../widgets/media_grid.dart';
-import '../albums/album_picker_sheet.dart';
 import 'gallery_filter_sheet.dart';
 import 'manage_page.dart';
+import 'media_actions_sheet.dart';
 
 /// 图库主页面：分页网格 + 类型筛选。
 class GalleryPage extends StatefulWidget {
@@ -117,26 +117,16 @@ class _GalleryPageState extends State<GalleryPage> {
         onLoadMore: _loadMore,
       );
 
-  /// 长按缩略图 → 加入相册。
+  /// 长按缩略图 → 文件操作面板（加入相册 / 重命名 / 移动）。
   ///
-  /// 先查一次成员关系再打开选择器，这样勾选状态反映的是真实情况。只对单项
-  /// 查询，代价可以接受；查不到也不阻塞加入操作，选择器会按「未知」处理。
-  Future<void> _addToAlbum(int index) async {
-    final item = _pager.items[index];
-    Set<int>? memberIds;
-    try {
-      memberIds = (await widget.client.albumsForMedia(item.id))
-          .map((a) => a.id)
-          .toSet();
-    } catch (_) {
-      // 忽略：拿不到既有成员关系时，选择器仍然可以完成「加入」。
-    }
-    if (!mounted) return;
-    await AlbumPickerSheet.show(
+  /// 面板自己负责每个动作的后续步骤；这里只关心"有没有变化"，有就重拉一次
+  /// ——改名和移动都会换掉文件名或所在目录，网格必须反映新状态。
+  Future<void> _openActions(int index) async {
+    await MediaActionsSheet.show(
       context,
       client: widget.client,
-      mediaIds: [item.id],
-      knownMemberIds: memberIds,
+      item: _pager.items[index],
+      onChanged: _refresh,
     );
   }
 
@@ -282,7 +272,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   item: _pager.items[i],
                   client: widget.client,
                   onTap: () => _openItem(i),
-                  onLongPress: () => _addToAlbum(i),
+                  onLongPress: () => _openActions(i),
                 ),
                 childCount: _pager.items.length,
               ),

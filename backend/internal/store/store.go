@@ -370,6 +370,36 @@ func nullInt64(v int64) any {
 	return v
 }
 
+// UpdateMediaLocation rewrites a media row in place after the file was renamed
+// or moved on disk.
+//
+// In place is the entire point: the id must survive, because album_items is a
+// foreign key with ON DELETE CASCADE (D15). Deleting the old row and inserting
+// a new one would silently drop the photo out of every album it belongs to,
+// and that loss does not undo itself.
+//
+// indexed_at is refreshed deliberately. The scanner's cleanup only removes
+// rows older than the start of the current run, so a rename that lands while
+// a scan is walking must look fresh or it gets pruned as "file disappeared"
+// — and the next scan would then re-index it under a brand new id, losing the
+// album membership anyway.
+func (s *Store) UpdateMediaLocation(id int64, path, name string, size, mtime int64, folderID int64, indexedAt string) error {
+	res, err := s.db.Exec(
+		`UPDATE media_files
+		    SET file_path = ?, file_name = ?, file_size = ?, file_mtime = ?,
+		        scan_folder_id = ?, indexed_at = ?
+		  WHERE id = ?`,
+		path, name, size, mtime, folderID, indexedAt, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update media location: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("media %d not found", id)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------- folders --
 
 // AddFolder registers a directory to scan. Adding an existing path re-enables it.
@@ -385,6 +415,26 @@ func (s *Store) AddFolder(path string) (int64, error) {
 		return 0, fmt.Errorf("add folder: %w", err)
 	}
 	return id, nil
+}
+
+// SetFolderEnabled toggles a folder without deleting it.
+//
+// A disabled folder stops being an authorisation root for file management
+// while staying in the list, so the user can switch a directory back on
+// without re-adding it (and without losing its row id).
+func (s *Store) SetFolderEnabled(id int64, enabled bool) error {
+	flag := 0
+	if enabled {
+		flag = 1
+	}
+	res, err := s.db.Exec(`UPDATE scan_folders SET enabled = ? WHERE id = ?`, flag, id)
+	if err != nil {
+		return fmt.Errorf("set folder enabled: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("folder %d not found", id)
+	}
+	return nil
 }
 
 // ListFolders returns every configured folder, newest first.
