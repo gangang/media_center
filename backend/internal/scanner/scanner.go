@@ -107,6 +107,13 @@ func (s *Scanner) Start(folderID int64) error {
 
 func (s *Scanner) run(folderID int64) {
 	started := time.Now()
+	// Everything indexed after this moment was written by someone else while we
+	// were walking — an upload completing, a rename landing. Pruning must leave
+	// those rows alone even though this scan never saw the files, otherwise a
+	// photo that finished uploading mid-scan gets deleted as "gone from disk".
+	// RFC3339 UTC sorts lexicographically, which is what the comparison in
+	// prune relies on.
+	cutoff := started.UTC().Format(time.RFC3339)
 	defer func() {
 		s.mu.Lock()
 		s.state.Running = false
@@ -136,7 +143,7 @@ func (s *Scanner) run(folderID int64) {
 	}
 
 	for _, f := range folders {
-		s.scanFolder(f)
+		s.scanFolder(f, cutoff)
 	}
 }
 
@@ -147,7 +154,7 @@ type outcome struct {
 	err     string
 }
 
-func (s *Scanner) scanFolder(f store.ScanFolder) {
+func (s *Scanner) scanFolder(f store.ScanFolder, cutoff string) {
 	if _, err := os.Stat(f.Path); err != nil {
 		s.fail(fmt.Sprintf("folder %s is not readable: %v", f.Path, err))
 		return
@@ -247,7 +254,7 @@ func (s *Scanner) scanFolder(f store.ScanFolder) {
 		s.fail("walk " + f.Path + ": " + walkErr.Error())
 	}
 
-	if n, err := s.prune(f.ID, seen); err != nil {
+	if n, err := s.prune(f.ID, seen, cutoff); err != nil {
 		s.fail("prune: " + err.Error())
 	} else if n > 0 {
 		s.bump(func(st *State) { st.Removed += int64(n) })
@@ -490,7 +497,18 @@ func (s *Scanner) EnsureThumbnail(mf *store.MediaFile) (string, error) {
 
 // prune drops index rows for files that no longer exist on disk, and removes
 // thumbnails that nothing references any more.
-func (s *Scanner) prune(folderID int64, seen map[string]bool) (int, error) {
+//
+// cutoff is the moment this scan run started. A row only qualifies for removal
+// when the file was not seen *and* the row is older than the cutoff. The second
+// condition is the whole point: refs are read here, at cleanup time, so without
+// it a file that landed on disk after the walk passed its directory — a photo
+// finishing its upload, a rename — looks exactly like a file that was deleted,
+// and gets removed. The damage is invisible in the logs (removed=1, no error)
+// and the user simply sees "the photo I just uploaded is gone again".
+//
+// The cost of being conservative is one extra scan: a file genuinely deleted
+// during this run is removed by the next one, whose cutoff is later still.
+func (s *Scanner) prune(folderID int64, seen map[string]bool, cutoff string) (int, error) {
 	refs, err := s.st.ListRefsByFolder(folderID)
 	if err != nil {
 		return 0, err
@@ -499,7 +517,7 @@ func (s *Scanner) prune(folderID int64, seen map[string]bool) (int, error) {
 	var goneIDs []int64
 	var goneHashes []string
 	for _, r := range refs {
-		if !seen[r.Path] {
+		if !seen[r.Path] && r.IndexedAt < cutoff {
 			goneIDs = append(goneIDs, r.ID)
 			goneHashes = append(goneHashes, r.Hash)
 		}

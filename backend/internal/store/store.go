@@ -630,18 +630,24 @@ func (s *Store) ListMedia(p ListParams) (*ListResult, error) {
 	return res, rows.Err()
 }
 
-// PathRef is a lightweight (id, path, hash) triple used when pruning rows for
-// files that disappeared from disk.
+// PathRef is a lightweight (id, path, hash, indexed_at) record used when
+// pruning rows for files that disappeared from disk.
+//
+// IndexedAt is part of the contract: pruning must not touch rows written after
+// the current scan started, because those belong to files that landed on disk
+// while the walk was already running (see scanner.prune).
 type PathRef struct {
-	ID   int64
-	Path string
-	Hash string
+	ID        int64
+	Path      string
+	Hash      string
+	IndexedAt string
 }
 
 // ListRefsByFolder returns every indexed file belonging to a folder.
 func (s *Store) ListRefsByFolder(folderID int64) ([]PathRef, error) {
 	rows, err := s.db.Query(
-		`SELECT id, file_path, COALESCE(content_hash,'') FROM media_files WHERE scan_folder_id = ?`,
+		`SELECT id, file_path, COALESCE(content_hash,''), COALESCE(indexed_at,'')
+		   FROM media_files WHERE scan_folder_id = ?`,
 		folderID)
 	if err != nil {
 		return nil, err
@@ -651,7 +657,7 @@ func (s *Store) ListRefsByFolder(folderID int64) ([]PathRef, error) {
 	var out []PathRef
 	for rows.Next() {
 		var r PathRef
-		if err := rows.Scan(&r.ID, &r.Path, &r.Hash); err != nil {
+		if err := rows.Scan(&r.ID, &r.Path, &r.Hash, &r.IndexedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
