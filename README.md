@@ -142,7 +142,7 @@ curl -X POST http://localhost:8080/api/tokens \
 | 方法 | 路径 | 说明 |
 |:---|:---|:---|
 | GET | `/api/ping` | 服务器名称与版本，无需令牌，用于连接探测 |
-| GET | `/api/stats` | 索引统计、扫描状态、ffmpeg 可用性 |
+| GET | `/api/stats` | 索引统计、扫描状态、ffmpeg 可用性、HEIC 缩略图能力 |
 
 ### 媒体
 
@@ -245,6 +245,19 @@ sha256( 小端 uint64 文件大小 || 文件前 256 KiB || 文件后 256 KiB )
 | 422 | 哈希不符，文件不进入媒体库 |
 
 同名文件不互相覆盖：目标名被占用时追加序号（`IMG_0001 (1).JPG`），以 `O_CREAT|O_EXCL` 原子认领。
+
+### HEIC（iPhone 照片）
+
+HEIC 会正常入库、正常下载，但缩略图能不能生成取决于 `ffmpeg` 有没有 HEVC 解码器——
+Go 标准库读不了 HEIC，这一条路完全靠外部工具。用 `GET /api/stats` 的 `heic_thumbnails`
+可以直接看出来：
+
+```json
+{ "ffmpeg_available": true, "heic_thumbnails": true }
+```
+
+`false` 时照片仍在库里、原图仍可下载，只是列表里显示占位图。换成带 HEVC 支持的 ffmpeg 即可，
+不需要改动服务端。
 
 ## 开发
 

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -100,4 +101,49 @@ func HasTool(name string) bool {
 	}
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+var (
+	hevcMu    sync.Mutex
+	hevcCache = map[string]bool{}
+)
+
+// CanDecodeHEVC reports whether the given ffmpeg can decode HEVC.
+//
+// This is the one question that decides whether iPhone photos work. HEIC is an
+// HEVC still image inside a QuickTime container; Go's standard library cannot
+// read it, so thumbnails depend entirely on ffmpeg having an HEVC decoder.
+// Builds vary (a static ffmpeg compiled without x265/HEVC support is common),
+// and the failure mode is silent: the photo indexes fine and simply has no
+// thumbnail. Reporting the capability turns "why are my iPhone photos blank"
+// into a one-line answer.
+//
+// The answer is cached per binary path: it cannot change while the process
+// runs, and `ffmpeg -decoders` costs a few dozen milliseconds.
+func CanDecodeHEVC(ffmpeg string) bool {
+	if ffmpeg == "" {
+		return false
+	}
+
+	hevcMu.Lock()
+	cached, ok := hevcCache[ffmpeg]
+	hevcMu.Unlock()
+	if ok {
+		return cached
+	}
+
+	supported := false
+	if _, err := exec.LookPath(ffmpeg); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-decoders").Output(); err == nil {
+			// Lines look like: " VFS..D hevc                 HEVC (...)"
+			supported = strings.Contains(string(out), " hevc ")
+		}
+	}
+
+	hevcMu.Lock()
+	hevcCache[ffmpeg] = supported
+	hevcMu.Unlock()
+	return supported
 }

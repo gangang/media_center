@@ -58,6 +58,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"scan":              s.sc.Status(),
 		"ffmpeg_available":  meta.HasTool(s.cfg.FFmpeg),
 		"ffprobe_available": meta.HasTool(s.cfg.FFprobe),
+		// HEIC (iPhone photos) can only be thumbnailed when ffmpeg has an HEVC
+		// decoder. Surfacing it here is the difference between "the gallery is
+		// broken" and "install an ffmpeg with HEVC support".
+		"heic_thumbnails": meta.CanDecodeHEVC(s.cfg.FFmpeg),
 	})
 }
 
