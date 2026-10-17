@@ -327,7 +327,7 @@ python3 scripts/gen-android-icons.py
 本项目以 Apache License 2.0 发布，完整条款见 [LICENSE](LICENSE)。
 
 ```
-Copyright 2026 Zhang Baobao
+Copyright 2026 ganggang
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
