@@ -62,6 +62,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/uploads/{id}/chunks/{index}", s.handleUploadChunk)
 	s.mux.HandleFunc("POST /api/uploads/{id}/complete", s.handleCompleteUpload)
 	s.mux.HandleFunc("DELETE /api/uploads/{id}", s.handleCancelUpload)
+
+	// Device tokens. Wrapped in ownerOnly because a device token that could
+	// mint tokens would survive its own revocation.
+	s.mux.Handle("GET /api/tokens", s.ownerOnly(http.HandlerFunc(s.handleListTokens)))
+	s.mux.Handle("POST /api/tokens", s.ownerOnly(http.HandlerFunc(s.handleCreateToken)))
+	s.mux.Handle("DELETE /api/tokens/{id}", s.ownerOnly(http.HandlerFunc(s.handleRevokeToken)))
 }
 
 // Handler returns the full middleware chain. Authentication wraps the mux so

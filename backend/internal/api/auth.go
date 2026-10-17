@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 	"strings"
 )
@@ -12,6 +15,26 @@ import (
 var publicPaths = map[string]bool{
 	"/":         true,
 	"/api/ping": true,
+}
+
+// principal is who a request speaks for.
+//
+// The distinction matters: the token in config.json is the owner — it can mint
+// and revoke device tokens. A device token is just a key to the library and
+// must not be able to create more keys, otherwise revoking one lost phone
+// would be pointless.
+type principal struct {
+	// owner is true when the request authenticated with the config token.
+	owner bool
+	// tokenID is the api_tokens row for a device token, 0 for the owner.
+	tokenID int64
+}
+
+type principalKey struct{}
+
+func principalFrom(r *http.Request) principal {
+	p, _ := r.Context().Value(principalKey{}).(principal)
+	return p
 }
 
 // withAuth enforces the shared token.
@@ -27,8 +50,20 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		if !s.tokenOK(extractToken(r)) {
+		p, ok := s.resolvePrincipal(extractToken(r))
+		if !ok {
 			writeErr(w, http.StatusUnauthorized, "invalid or missing token")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+	})
+}
+
+// ownerOnly rejects device tokens. Used for the routes that manage credentials.
+func (s *Server) ownerOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !principalFrom(r).owner {
+			writeErr(w, http.StatusForbidden, "only the owner token may manage device tokens")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -53,10 +88,27 @@ func extractToken(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("token"))
 }
 
-func (s *Server) tokenOK(candidate string) bool {
-	if candidate == "" || s.cfg.Token == "" {
-		return false
+// resolvePrincipal maps a presented token to who it belongs to.
+func (s *Server) resolvePrincipal(candidate string) (principal, bool) {
+	if candidate == "" {
+		return principal{}, false
 	}
-	// Constant-time comparison so the token cannot be recovered by timing.
-	return subtle.ConstantTimeCompare([]byte(candidate), []byte(s.cfg.Token)) == 1
+
+	// The owner token is compared in constant time so it cannot be recovered
+	// by measuring how long the comparison takes.
+	if s.cfg.Token != "" &&
+		subtle.ConstantTimeCompare([]byte(candidate), []byte(s.cfg.Token)) == 1 {
+		return principal{owner: true}, true
+	}
+
+	// Device tokens are looked up by digest. A database read on every request
+	// is deliberate: caching a revoked token for even a few seconds would mean
+	// "I cut that phone off" is not immediately true.
+	sum := sha256.Sum256([]byte(candidate))
+	tok, found, err := s.st.TokenByHash(hex.EncodeToString(sum[:]))
+	if err != nil || !found || tok.Revoked() {
+		return principal{}, false
+	}
+	_ = s.st.TouchToken(tok.ID)
+	return principal{tokenID: tok.ID}, true
 }

@@ -115,6 +115,26 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
     received_at TEXT    NOT NULL,
     PRIMARY KEY (upload_id, chunk_index)
 );
+
+-- Device tokens. One row per phone or laptop that is allowed in, so a lost
+-- device can be cut off without invalidating every other client.
+--
+-- Only the SHA-256 digest is stored. index.db gets copied around (backups, a
+-- NAS share, someone poking at it) and a file full of live credentials would
+-- turn every one of those copies into a key to the whole library.
+--
+-- The token in config.json stays valid and is not represented here: it is the
+-- owner credential, the one that can create and revoke the rows in this table.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    NOT NULL,
+    token_hash   TEXT    NOT NULL UNIQUE,
+    created_at   TEXT    NOT NULL,
+    last_used_at TEXT,
+    revoked_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
 `
 
 // postSchema runs after the column migrations, so it may safely reference

@@ -37,6 +37,9 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		"version":       Version,
 		"api_version":   APIVersion,
 		"auth_required": true,
+		// Additive capability flag: a client that wants per-device tokens can
+		// check this instead of probing and handling a 404.
+		"device_tokens": true,
 	})
 }
 
@@ -177,7 +180,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := r.URL.Query().Get("token")
-	if !s.tokenOK(tok) {
+	// The page is public, so a token in the URL is the visitor's way of making
+	// the links on it usable. An invalid one is dropped rather than echoed
+	// back into the HTML.
+	if _, ok := s.resolvePrincipal(tok); !ok {
 		tok = ""
 	}
 

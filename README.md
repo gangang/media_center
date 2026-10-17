@@ -116,6 +116,27 @@ flutter run -d macos              # 或 flutter run -d <android-device>
 | 自定义请求头 | `X-Token: <token>` |
 | 查询参数 | `?token=<token>`（供 `<img src>` 等无法设置请求头的场景） |
 
+令牌有两种：
+
+- **主令牌**：`config.json` 里的那个，首次启动时随机生成。它能做所有事，包括签发和吊销设备令牌。
+- **设备令牌**：为每台设备单独签发。丢了手机只需要吊销那一个，其他设备不受影响。
+
+设备令牌只存 SHA-256 摘要，明文只在签发的那一刻返回一次，之后无法再取回。
+
+| 方法 | 路径 | 说明 |
+|:---|:---|:---|
+| GET | `/api/tokens` | 已签发的设备令牌（不含明文），**仅主令牌可用** |
+| POST | `/api/tokens` | 签发一个，`{"name": "我的手机"}`，响应里的 `token` 只出现这一次 |
+| DELETE | `/api/tokens/{id}` | 吊销，立即生效；重复吊销同样返回 204 |
+
+```bash
+# 给手机签一个
+curl -X POST http://localhost:8080/api/tokens \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"我的手机"}'
+```
+
 ### 服务器信息
 
 | 方法 | 路径 | 说明 |
