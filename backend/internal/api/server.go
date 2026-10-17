@@ -65,9 +65,14 @@ func (s *Server) routes() {
 
 	// Device tokens. Wrapped in ownerOnly because a device token that could
 	// mint tokens would survive its own revocation.
-	s.mux.Handle("GET /api/tokens", s.ownerOnly(http.HandlerFunc(s.handleListTokens)))
-	s.mux.Handle("POST /api/tokens", s.ownerOnly(http.HandlerFunc(s.handleCreateToken)))
-	s.mux.Handle("DELETE /api/tokens/{id}", s.ownerOnly(http.HandlerFunc(s.handleRevokeToken)))
+	s.mux.Handle("GET /api/tokens", s.ownerOnly("manage device tokens", http.HandlerFunc(s.handleListTokens)))
+	s.mux.Handle("POST /api/tokens", s.ownerOnly("manage device tokens", http.HandlerFunc(s.handleCreateToken)))
+	s.mux.Handle("DELETE /api/tokens/{id}", s.ownerOnly("manage device tokens", http.HandlerFunc(s.handleRevokeToken)))
+
+	// Directory browsing for the folder picker. Owner-only: the tree says a lot
+	// about the machine (usernames, mounted drives), which is more than a
+	// device token needs. See browse.go for what this endpoint is not.
+	s.mux.Handle("GET /api/fs/browse", s.ownerOnly("browse the server's directories", http.HandlerFunc(s.handleBrowse)))
 }
 
 // Handler returns the full middleware chain. Authentication wraps the mux so

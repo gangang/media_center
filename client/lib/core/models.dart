@@ -241,6 +241,87 @@ class ScanFolder {
       );
 }
 
+/// 服务端目录浏览结果里的一个子目录。
+class ServerDirEntry {
+  const ServerDirEntry({
+    required this.name,
+    required this.path,
+    required this.hidden,
+  });
+
+  final String name;
+  final String path;
+
+  /// 点号开头。界面置灰显示：扫描父目录时会跳过它，但把它本身注册成
+  /// 扫描目录是会扫的，所以不能藏起来让用户找不到。
+  final bool hidden;
+
+  factory ServerDirEntry.fromJson(Map<String, dynamic> j) => ServerDirEntry(
+        name: (j['name'] as String?) ?? '',
+        path: (j['path'] as String?) ?? '',
+        hidden: (j['hidden'] as bool?) ?? false,
+      );
+}
+
+/// 服务端算好的快捷入口（主目录、图片、外接卷…）。
+///
+/// 放在服务端算是因为只有它知道自己的平台和挂载点，否则每个平台的差异
+/// 都会漏进这个 Flutter 界面里。
+class ServerDirShortcut {
+  const ServerDirShortcut({required this.label, required this.path});
+
+  final String label;
+  final String path;
+
+  factory ServerDirShortcut.fromJson(Map<String, dynamic> j) => ServerDirShortcut(
+        label: (j['label'] as String?) ?? '',
+        path: (j['path'] as String?) ?? '',
+      );
+}
+
+/// `GET /api/fs/browse` 的响应。
+///
+/// 存在的原因：挑选器要能浏览服务端的目录——手机打不开服务端上的文件
+/// 对话框，两台机器。注意浏览只是导航，**不构成授权**；目录获得管理权限
+/// 是在用户通过 `POST /api/folders` 把它注册进来的那一刻。
+class ServerBrowse {
+  const ServerBrowse({
+    required this.path,
+    required this.parent,
+    required this.home,
+    required this.entries,
+    required this.shortcuts,
+    required this.truncated,
+  });
+
+  final String path;
+
+  /// 上一级；已在文件系统根时为空串。
+  final String parent;
+  final String home;
+  final List<ServerDirEntry> entries;
+  final List<ServerDirShortcut> shortcuts;
+
+  /// 子目录超过服务端上限（500）被截断。界面要提示改用手动输入，
+  /// 否则用户会以为"就这么多目录"。
+  final bool truncated;
+
+  factory ServerBrowse.fromJson(Map<String, dynamic> j) => ServerBrowse(
+        path: (j['path'] as String?) ?? '',
+        parent: (j['parent'] as String?) ?? '',
+        home: (j['home'] as String?) ?? '',
+        entries: ((j['entries'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(ServerDirEntry.fromJson)
+            .toList(growable: false),
+        shortcuts: ((j['shortcuts'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(ServerDirShortcut.fromJson)
+            .toList(growable: false),
+        truncated: (j['truncated'] as bool?) ?? false,
+      );
+}
+
 /// 相册。
 ///
 /// [itemCount] 与 [coverUrl] 由后端推导（封面取相册内最早加入的一项），

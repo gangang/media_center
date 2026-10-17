@@ -59,11 +59,17 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// ownerOnly rejects device tokens. Used for the routes that manage credentials.
-func (s *Server) ownerOnly(next http.Handler) http.Handler {
+// ownerOnly rejects device tokens. Used for the routes that act on behalf of
+// the owner rather than on behalf of a device: minting tokens, and browsing the
+// server's own filesystem.
+//
+// reason is a parameter because the refusal is shown to the user, and "why was
+// I refused" should name the actual reason rather than whatever the first
+// caller happened to need.
+func (s *Server) ownerOnly(reason string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !principalFrom(r).owner {
-			writeErr(w, http.StatusForbidden, "only the owner token may manage device tokens")
+			writeErr(w, http.StatusForbidden, "only the owner token may "+reason)
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -220,6 +220,15 @@ class ApiClient {
   Future<void> addFolder(String path) =>
       _postJson('/api/folders', {'path': path});
 
+  /// 浏览服务端目录，给"添加媒体目录"的挑选器用。
+  ///
+  /// 只有主令牌能调：目录树会暴露服务端的用户名、挂载盘这类信息，
+  /// 设备令牌拿不到。[path] 为空时服务端回到主目录。
+  Future<ServerBrowse> browseDirectories(String path) async {
+    final json = await _getJson('/api/fs/browse', query: {'path': path});
+    return ServerBrowse.fromJson(json);
+  }
+
   Future<void> deleteFolder(int id) async {
     await _deleteJson('/api/folders/$id');
   }

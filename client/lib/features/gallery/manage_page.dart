@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
 import '../../core/models.dart';
+import 'folder_picker_page.dart';
 
 /// 服务器管理：查看索引统计、增删扫描目录、触发扫描。
 class ManagePage extends StatefulWidget {
@@ -82,46 +83,23 @@ class _ManagePageState extends State<ManagePage> {
     }
   }
 
+  /// 打开目录挑选器。
+  ///
+  /// 以前这里是个手输绝对路径的对话框，手机用户根本不知道服务端上的路径
+  /// 长什么样，等于不可用。现在是服务端列目录、客户端导航的挑选器，
+  /// 手输降级成页面里的高级入口。
   Future<void> _addFolder() async {
-    final controller = TextEditingController();
-    final path = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加媒体目录'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '填写服务端主机上的绝对路径。添加后会自动开始扫描。',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: '/Users/you/Pictures',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FolderPickerPage(
+          client: widget.client,
+          registeredPaths:
+              _folders.where((f) => f.enabled).map((f) => f.path).toSet(),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('添加'),
-          ),
-        ],
       ),
     );
-
-    if (path == null || path.isEmpty) return;
-    await _run(() => widget.client.addFolder(path));
+    if (changed == true) await _refresh();
   }
 
   Future<void> _deleteFolder(ScanFolder folder) async {
