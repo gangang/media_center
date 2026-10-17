@@ -22,51 +22,74 @@ class MediaActionsSheet {
     return showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              dense: true,
-              title: Text(item.fileName,
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: Text(
-                item.filePath.isEmpty ? '路径未知' : item.filePath,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        // 四个操作项加标题在小屏手机上已经超过半屏高。直接 Column 会从
+        // 「移动到…」开始往下溢出二十多像素——这个溢出是测试先发现的，
+        // 但真机一样会撞上。可滚动是必要的，不是保险。
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  dense: true,
+                  title: Text(item.fileName,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    item.filePath.isEmpty ? '路径未知' : item.filePath,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.photo_album_outlined),
+                  title: const Text('加入相册'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _addToAlbum(context, client: client, item: item);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.drive_file_rename_outline),
+                  title: const Text('重命名'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final applied =
+                        await _rename(context, client: client, item: item);
+                    if (applied != null) await onChanged();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.drive_folder_upload_outlined),
+                  title: const Text('移动到…'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final moved =
+                        await _move(context, client: client, item: item);
+                    if (moved) await onChanged();
+                  },
+                ),
+                ListTile(
+                  leading:
+                      Icon(Icons.delete_outline, color: theme.colorScheme.error),
+                  title: Text('删除',
+                      style: TextStyle(color: theme.colorScheme.error)),
+                  subtitle: const Text('删除磁盘文件，不可恢复'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final deleted =
+                        await _delete(context, client: client, item: item);
+                    if (deleted) await onChanged();
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.photo_album_outlined),
-              title: const Text('加入相册'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                await _addToAlbum(context, client: client, item: item);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.drive_file_rename_outline),
-              title: const Text('重命名'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final applied = await _rename(context, client: client, item: item);
-                if (applied != null) await onChanged();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.drive_folder_upload_outlined),
-              title: const Text('移动到…'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final moved = await _move(context, client: client, item: item);
-                if (moved) await onChanged();
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -110,6 +133,46 @@ class MediaActionsSheet {
       SnackBar(content: Text('已重命名为 $applied')),
     );
     return applied;
+  }
+
+  /// 删除单个文件。返回 true 表示调用方应该重拉列表。
+  ///
+  /// 确认框里**必须显示完整路径**：只显示文件名的话，用户分不清这是删
+  /// 手机传上来的副本，还是删 Mac 里 `~/Pictures` 下的原始文件。破坏性
+  /// 操作的确认信息要能独立回答"我到底在删什么"。
+  static Future<bool> _delete(
+    BuildContext context, {
+    required ApiClient client,
+    required MediaItem item,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => DeleteConfirmDialog(
+        title: '删除这个文件？',
+        fileName: item.fileName,
+        filePath: item.filePath,
+      ),
+    );
+    if (confirmed != true || !context.mounted) return false;
+
+    try {
+      final outcome = await client.deleteMedia(item.id);
+      if (!context.mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(outcome.fileExisted == false
+              ? '已从媒体库移除（文件此前已不在磁盘上）'
+              : '已删除 ${item.fileName}'),
+        ),
+      );
+      return true;
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('删除失败：${e.message}')));
+      }
+      return false;
+    }
   }
 
   static Future<bool> _move(
@@ -190,6 +253,68 @@ class MediaActionsSheet {
       }
       return false;
     }
+  }
+}
+
+/// 删除确认框。
+///
+/// 公开理由同 [RenameDialog]：让测试直接驱动真的这一个，而不是复制一份。
+/// 确认文案刻意分成两段——文件名是用户认识的那个东西，路径是这次操作真正的
+/// 作用对象（删 `library/` 里的副本还是删用户自己的原图，全看这一行）。
+class DeleteConfirmDialog extends StatelessWidget {
+  const DeleteConfirmDialog({
+    super.key,
+    required this.title,
+    required this.fileName,
+    required this.filePath,
+  });
+
+  final String title;
+  final String fileName;
+
+  /// 服务端返回的绝对路径；空字符串时只显示"路径未知"，不猜。
+  final String filePath;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text(title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(fileName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Text(
+            filePath.isEmpty ? '路径未知' : filePath,
+            style: TextStyle(fontSize: 12, color: theme.colorScheme.outline),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '文件将从磁盘上删除，媒体库和相册里的记录一并移除，且无法恢复。',
+            style: TextStyle(fontSize: 13, color: theme.colorScheme.error),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: theme.colorScheme.error,
+            foregroundColor: theme.colorScheme.onError,
+          ),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('删除'),
+        ),
+      ],
+    );
   }
 }
 

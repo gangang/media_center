@@ -264,6 +264,25 @@ class ApiClient {
     return MediaItem.fromJson(json['item'] as Map<String, dynamic>);
   }
 
+  /// 删除单个媒体：索引行 + 磁盘文件 + 缩略图一起删。
+  ///
+  /// **只删索引行是不够的**——文件还在，下次扫描会把它当新文件重新索引，
+  /// 用户看到"删了又回来"。
+  Future<DeleteOutcome> deleteMedia(int id) async {
+    final json = await _deleteJson('/api/media/$id');
+    return DeleteOutcome(
+      id: id,
+      ok: (json['deleted'] as bool?) ?? true,
+      fileExisted: json['file_existed'] as bool?,
+    );
+  }
+
+  /// 批量删除。部分失败是正常结果，[DeleteResult.failed] > 0 不代表没删成。
+  Future<DeleteResult> deleteMediaBatch(List<int> ids) async {
+    final json = await _postJson('/api/media/delete', {'ids': ids});
+    return DeleteResult.fromJson(json);
+  }
+
   /// 批量移动。部分失败是正常结果，由调用方决定怎么提示。
   Future<MoveResult> moveMedia(List<int> ids, int folderId) async {
     final json = await _postJson('/api/media/move', {

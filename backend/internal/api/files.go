@@ -36,10 +36,10 @@ import (
 	"mediacenter/internal/store"
 )
 
-// maxMoveBatch bounds one batch move. Renaming and moving are cheap per item
-// but unbounded input is not: a client bug that sends 100k ids would otherwise
-// hold the request (and the disk) for minutes.
-const maxMoveBatch = 200
+// maxFileBatch bounds one batch of file operations. Renaming, moving and
+// deleting are cheap per item but unbounded input is not: a client bug that
+// sends 100k ids would otherwise hold the request (and the disk) for minutes.
+const maxFileBatch = 200
 
 // renameBody is PATCH /api/media/{id}. Both fields are optional, but at least
 // one must be present — a request that changes nothing is a client bug, and
@@ -174,9 +174,9 @@ func (s *Server) handleMoveMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "ids 不能为空")
 		return
 	}
-	if len(body.IDs) > maxMoveBatch {
+	if len(body.IDs) > maxFileBatch {
 		writeErr(w, http.StatusBadRequest,
-			fmt.Sprintf("一次最多移动 %d 个文件", maxMoveBatch))
+			fmt.Sprintf("一次最多移动 %d 个文件", maxFileBatch))
 		return
 	}
 
@@ -257,6 +257,174 @@ func (s *Server) handleMoveMedia(w http.ResponseWriter, r *http.Request) {
 		"failed":  len(body.IDs) - moved,
 		"results": results,
 	})
+}
+
+// ---------------------------------------------------------------- delete --
+
+// deleteBody is POST /api/media/delete.
+type deleteBody struct {
+	IDs []int64 `json:"ids"`
+}
+
+// handleDeleteMedia removes one file: index row, the file on disk, and its
+// thumbnail.
+//
+// All three, in that order of importance but not of execution: dropping only
+// the row would let the next scan re-index the file (the user sees "it came
+// back"), and leaving the thumbnail behind would keep a picture of a deleted
+// file on disk forever.
+//
+// There is no trash. The design considered one and the decision was to ship
+// the simpler thing first: a recycle bin doubles the disk footprint for a
+// failure mode (a mis-tap) that a confirmation dialog showing the full path
+// addresses more directly. It can be added later as a directory plus a
+// "clear trash" action, without changing this API.
+//
+// A file that is already gone from disk is not an error: the row is stale,
+// and removing it is exactly what the user asked for.
+func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
+	id, err := idFromPath(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid media id")
+		return
+	}
+
+	m, err := s.st.GetMedia(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if m == nil {
+		writeErr(w, http.StatusNotFound, "media not found")
+		return
+	}
+
+	roots, err := s.st.EnabledFolders()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !underRoots(m.FilePath, roots) {
+		writeErr(w, http.StatusForbidden,
+			"该文件所在的目录未注册为扫描目录，不能管理。请先在服务器管理中添加该目录")
+		return
+	}
+
+	fileRemoved := false
+	fileExisted := true
+	if err := os.Remove(m.FilePath); err == nil {
+		fileRemoved = true
+	} else if os.IsNotExist(err) {
+		// Stale row: the file is already gone, so removing the row is the
+		// whole job and there is nothing to report as a problem.
+		fileExisted = false
+	} else {
+		// A file that cannot be removed (permissions, an immutable flag, a
+		// read-only mount) must not have its row silently dropped: the index
+		// would be describing a file that is still there.
+		writeErr(w, http.StatusBadRequest, "删除文件失败："+err.Error())
+		return
+	}
+
+	if err := s.st.DeleteMediaByIDs([]int64{m.ID}); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.dropOrphanThumbnails([]string{m.ContentHash})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":      true,
+		"file_removed": fileRemoved,
+		"file_existed": fileExisted,
+	})
+}
+
+func (s *Server) handleDeleteMediaBatch(w http.ResponseWriter, r *http.Request) {
+	var body deleteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids 不能为空")
+		return
+	}
+	if len(body.IDs) > maxFileBatch {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Sprintf("一次最多删除 %d 个文件", maxFileBatch))
+		return
+	}
+
+	roots, err := s.st.EnabledFolders()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type result struct {
+		ID    int64  `json:"id"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+
+	results := make([]result, 0, len(body.IDs))
+	var hashes []string
+	deleted := 0
+
+	for _, id := range body.IDs {
+		m, err := s.st.GetMedia(id)
+		if err != nil {
+			results = append(results, result{ID: id, Error: err.Error()})
+			continue
+		}
+		if m == nil {
+			results = append(results, result{ID: id, Error: "找不到该媒体"})
+			continue
+		}
+		if !underRoots(m.FilePath, roots) {
+			results = append(results, result{ID: id, Error: "所在目录未注册，不能管理"})
+			continue
+		}
+		if err := os.Remove(m.FilePath); err != nil && !os.IsNotExist(err) {
+			results = append(results, result{ID: id, Error: "删除文件失败：" + err.Error()})
+			continue
+		}
+		if err := s.st.DeleteMediaByIDs([]int64{m.ID}); err != nil {
+			results = append(results, result{ID: id, Error: err.Error()})
+			continue
+		}
+		hashes = append(hashes, m.ContentHash)
+		results = append(results, result{ID: id, OK: true})
+		deleted++
+	}
+
+	s.dropOrphanThumbnails(hashes)
+
+	// Same partial-failure contract as batch move: report what happened per
+	// item, never roll back what already succeeded.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted": deleted,
+		"failed":  len(body.IDs) - deleted,
+		"results": results,
+	})
+}
+
+// dropOrphanThumbnails removes cache files that no row references any more.
+//
+// The reference count is the content hash: two identical files in different
+// folders share one thumbnail, so a hash still referenced by any row must be
+// kept. This is the same rule the scanner applies when pruning.
+func (s *Server) dropOrphanThumbnails(hashes []string) {
+	for _, h := range hashes {
+		if h == "" {
+			continue
+		}
+		n, err := s.st.CountByHash(h)
+		if err != nil || n > 0 {
+			continue
+		}
+		_ = os.Remove(s.cfg.ThumbPath(h))
+	}
 }
 
 // -------------------------------------------------------------- helpers --

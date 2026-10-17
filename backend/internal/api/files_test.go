@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"mediacenter/internal/scanner"
 	"mediacenter/internal/store"
 )
 
@@ -384,4 +386,183 @@ func itoa(n int64) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// --------------------------------------------------------------- delete --
+
+// The trap delete must avoid: dropping only the index row lets the next scan
+// re-index the file, and the user watches the photo they deleted come back.
+// This test drives the real scanner to prove it stays gone.
+func TestDeleteActuallyDeletesTheFile(t *testing.T) {
+	s, st := newServerWithStore(t)
+	root := t.TempDir()
+	m := seedMedia(t, st, root, "trash-me.jpg", store.OriginUpload)
+
+	// A thumbnail on disk, keyed by content hash like the real pipeline.
+	thumb := s.cfg.ThumbPath("abc123")
+	if err := os.MkdirAll(filepath.Dir(thumb), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(thumb, []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertMedia(&store.MediaFile{
+		FilePath: "/elsewhere/copy.jpg", FileName: "copy.jpg", FileSize: 5,
+		MimeType: "image/jpeg", MediaType: "photo", ContentHash: "abc123",
+		IndexedAt: "2026-10-01T00:00:00Z", Origin: store.OriginUpload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, s, http.MethodDelete, "/api/media/"+itoa(m.ID), ownerToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
+	}
+
+	if _, err := os.Stat(m.FilePath); !os.IsNotExist(err) {
+		t.Error("file still on disk")
+	}
+	if got, _ := st.GetMedia(m.ID); got != nil {
+		t.Error("row survived the delete")
+	}
+	if _, err := os.Stat(thumb); err != nil {
+		t.Error("thumbnail for an unreferenced hash was left behind")
+	}
+
+	// Now the scan that could resurrect it.
+	sc := scanner.New(s.cfg, st)
+	if err := sc.Start(0); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && sc.Status().Running; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	res, err := st.ListMedia(store.ListParams{PageSize: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range res.Items {
+		if item.FilePath == m.FilePath {
+			t.Fatal("the deleted file was re-indexed by the scan: the row-only delete bug is back")
+		}
+	}
+}
+
+// A row pointing at a file that is already gone is stale, not an error:
+// removing it is the whole job.
+func TestDeleteMissingFileStillClearsTheRow(t *testing.T) {
+	s, st := newServerWithStore(t)
+	root := t.TempDir()
+	m := seedMedia(t, st, root, "already-gone.jpg", store.OriginScan)
+	if err := os.Remove(m.FilePath); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, s, http.MethodDelete, "/api/media/"+itoa(m.ID), ownerToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		FileExisted bool `json:"file_existed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.FileExisted {
+		t.Error("response claims the file existed")
+	}
+}
+
+// A file that cannot be removed must not silently lose its row — the index
+// would then describe a file that is still sitting on the disk.
+func TestDeleteRefusesWhenFileCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permissions do not apply")
+	}
+	s, st := newServerWithStore(t)
+	root := t.TempDir()
+	m := seedMedia(t, st, root, "locked.jpg", store.OriginScan)
+
+	// Strip write permission on the directory so the unlink fails.
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+
+	rec := do(t, s, http.MethodDelete, "/api/media/"+itoa(m.ID), ownerToken, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if got, _ := st.GetMedia(m.ID); got == nil {
+		t.Error("row was dropped even though the file is still there")
+	}
+}
+
+func TestDeleteRequiresOwnerToken(t *testing.T) {
+	s, st := newServerWithStore(t)
+	m := seedMedia(t, st, t.TempDir(), "a.jpg", store.OriginScan)
+
+	device := createToken(t, s, "phone")
+	rec := do(t, s, http.MethodDelete, "/api/media/"+itoa(m.ID), device, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("device token delete: status %d, want 403; body %s", rec.Code, rec.Body)
+	}
+	// The file must still be there.
+	if _, err := os.Stat(m.FilePath); err != nil {
+		t.Error("a device token managed to delete a file")
+	}
+}
+
+func TestBatchDeleteReportsPartialFailure(t *testing.T) {
+	s, st := newServerWithStore(t)
+	root := t.TempDir()
+
+	ok := seedMedia(t, st, root, "good.jpg", store.OriginUpload)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "loose.jpg"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertMedia(&store.MediaFile{
+		FilePath: filepath.Join(outside, "loose.jpg"), FileName: "loose.jpg",
+		FileSize: 1, MimeType: "image/jpeg", MediaType: "photo",
+		IndexedAt: "2026-10-01T00:00:00Z", Origin: store.OriginScan,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loose, _ := st.GetMediaByPath(filepath.Join(outside, "loose.jpg"))
+
+	rec := do(t, s, http.MethodPost, "/api/media/delete", ownerToken, map[string]any{
+		"ids": []int64{ok.ID, loose.ID, 999999},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
+	}
+
+	var out struct {
+		Deleted int `json:"deleted"`
+		Failed  int `json:"failed"`
+		Results []struct {
+			ID    int64  `json:"id"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Deleted != 1 || out.Failed != 2 {
+		t.Errorf("deleted = %d, failed = %d, want 1 and 2", out.Deleted, out.Failed)
+	}
+	if _, err := os.Stat(ok.FilePath); !os.IsNotExist(err) {
+		t.Error("the good file was not deleted")
+	}
+	if _, err := os.Stat(loose.FilePath); err != nil {
+		t.Error("the file outside the registered folders was deleted")
+	}
+	for _, r := range out.Results {
+		if !r.OK && r.Error == "" {
+			t.Errorf("failed item %d carries no reason", r.ID)
+		}
+	}
 }

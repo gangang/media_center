@@ -47,10 +47,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/media/{id}/albums", s.handleMediaAlbums)
 
 	// File management. Owner-only: these mutate the user's files, so a device
-	// token (a phone) must not be able to rename or move anything. Path-level
-	// authorisation (registered folders only) is enforced inside the handlers.
+	// token (a phone) must not be able to touch them. Path-level authorisation
+	// (registered folders only) is enforced inside the handlers.
 	s.mux.Handle("PATCH /api/media/{id}", s.ownerOnly("rename or move files", http.HandlerFunc(s.handleRenameMedia)))
 	s.mux.Handle("POST /api/media/move", s.ownerOnly("rename or move files", http.HandlerFunc(s.handleMoveMedia)))
+	s.mux.Handle("DELETE /api/media/{id}", s.ownerOnly("delete files", http.HandlerFunc(s.handleDeleteMedia)))
+	s.mux.Handle("POST /api/media/delete", s.ownerOnly("delete files", http.HandlerFunc(s.handleDeleteMediaBatch)))
 
 	s.mux.HandleFunc("GET /api/albums", s.handleListAlbums)
 	s.mux.HandleFunc("POST /api/albums", s.handleCreateAlbum)

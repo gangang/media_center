@@ -379,6 +379,54 @@ class MoveResult {
       );
 }
 
+/// 批量删除响应的单项结果。
+class DeleteOutcome {
+  const DeleteOutcome({
+    required this.id,
+    required this.ok,
+    this.error = '',
+    this.fileExisted,
+  });
+
+  final int id;
+  final bool ok;
+  final String error;
+
+  /// 文件原本就不在磁盘上时为 false。两者都算删除成功，但界面提示不同：
+  /// 文件本来就没有，说明索引和磁盘早已不一致，值得让用户知道。
+  final bool? fileExisted;
+}
+
+/// `POST /api/media/delete` 的响应。
+///
+/// 部分失败是正常形态：一个文件在只读盘上、一个 id 刚被别人删掉，
+/// 就该是"N 个成功、其余失败并说明原因"，而不是整批 500。
+class DeleteResult {
+  const DeleteResult({
+    required this.deleted,
+    required this.failed,
+    required this.results,
+  });
+
+  final int deleted;
+  final int failed;
+  final List<DeleteOutcome> results;
+
+  factory DeleteResult.fromJson(Map<String, dynamic> j) => DeleteResult(
+        deleted: (j['deleted'] as num?)?.toInt() ?? 0,
+        failed: (j['failed'] as num?)?.toInt() ?? 0,
+        results: ((j['results'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((r) => DeleteOutcome(
+                  id: (r['id'] as num?)?.toInt() ?? 0,
+                  ok: (r['ok'] as bool?) ?? false,
+                  error: (r['error'] as String?) ?? '',
+                  fileExisted: r['file_existed'] as bool?,
+                ))
+            .toList(growable: false),
+      );
+}
+
 /// 相册。
 ///
 /// [itemCount] 与 [coverUrl] 由后端推导（封面取相册内最早加入的一项），
