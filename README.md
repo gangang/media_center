@@ -54,6 +54,11 @@ scripts/            发布构建、冒烟测试、回归验证
 
 ## 快速开始
 
+不想编译的，直接下载预编译版本（5 个平台的服务端 + Android 包）：
+[Releases](https://github.com/gangang/media_center/releases)。解压后读里面的 `INSTALL.md`。
+
+以下是从源码构建的方式。
+
 ### 1. 编译并启动后端
 
 ```bash
