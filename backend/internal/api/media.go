@@ -31,6 +31,15 @@ type mediaDTO struct {
 	// Origin is "scan" or "upload", so a client can show where a file came from
 	// without a second request.
 	Origin string `json:"origin"`
+	// FilePath is the absolute path on the server. It is what makes the library
+	// legible ("where does this photo actually live?") and what every file
+	// operation must confirm back to the user before touching anything.
+	//
+	// It is visible to any paired device, not just the owner token: those
+	// devices can already fetch every original, so the directory layout is the
+	// smaller of the two disclosures. Listing directories, by contrast, is
+	// owner-only (browse.go).
+	FilePath string `json:"file_path"`
 }
 
 func toDTO(m store.MediaFile) mediaDTO {
@@ -49,6 +58,7 @@ func toDTO(m store.MediaFile) mediaDTO {
 		ThumbnailURL: fmt.Sprintf("/api/media/%d/thumbnail", m.ID),
 		OriginalURL:  fmt.Sprintf("/api/media/%d/original", m.ID),
 		Origin:       m.Origin,
+		FilePath:     m.FilePath,
 	}
 }
 

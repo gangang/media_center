@@ -4,6 +4,7 @@ import '../../core/api_client.dart';
 import '../../core/media_pager.dart';
 import '../../widgets/media_grid.dart';
 import '../albums/album_picker_sheet.dart';
+import 'gallery_filter_sheet.dart';
 import 'manage_page.dart';
 
 /// 图库主页面：分页网格 + 类型筛选。
@@ -33,6 +34,9 @@ class _GalleryPageState extends State<GalleryPage> {
   late MediaPager _pager;
   String _filter = ''; // '' | 'photo' | 'video'
 
+  /// 排序与过滤。后端一直支持，这里是客户端第一次把它们接上。
+  GalleryFilter _galleryFilter = GalleryFilter.all;
+
   @override
   void initState() {
     super.initState();
@@ -59,8 +63,22 @@ class _GalleryPageState extends State<GalleryPage> {
           type: type,
           page: page,
           pageSize: pageSize,
+          sort: _galleryFilter.sort,
+          origin: _galleryFilter.origin,
+          from: _galleryFilter.from == null ? null : dayParam(_galleryFilter.from!),
+          to: _galleryFilter.to == null ? null : nextDayParam(_galleryFilter.to!),
         ),
       );
+
+  Future<void> _openFilterSheet() async {
+    final picked = await GalleryFilterSheet.show(context, _galleryFilter);
+    if (picked == null || picked == _galleryFilter) return;
+    setState(() {
+      _galleryFilter = picked;
+      _pager = _makePager(_filter);
+    });
+    await _refresh();
+  }
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
@@ -142,6 +160,14 @@ class _GalleryPageState extends State<GalleryPage> {
             tooltip: '刷新',
             onPressed: _pager.loading ? null : _refresh,
             icon: const Icon(Icons.refresh),
+          ),
+          IconButton(
+            tooltip: '排序与筛选',
+            onPressed: _openFilterSheet,
+            // 有过滤条件时换成实心图标：不打开面板也知道当前不是默认视图。
+            icon: Icon(_galleryFilter.isActive
+                ? Icons.filter_alt
+                : Icons.filter_alt_outlined),
           ),
           IconButton(
             tooltip: '服务器管理',

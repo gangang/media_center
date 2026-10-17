@@ -18,6 +18,8 @@ class MediaItem {
     required this.audioCodec,
     required this.thumbnailUrl,
     required this.originalUrl,
+    this.filePath = '',
+    this.origin = '',
   });
 
   final int id;
@@ -33,6 +35,13 @@ class MediaItem {
   final String audioCodec;
   final String thumbnailUrl;
   final String originalUrl;
+
+  /// 文件在服务端的绝对路径。用来回答"这张照片到底在哪"，
+  /// 也是任何文件操作前必须回显给用户的那一行。
+  final String filePath;
+
+  /// `scan`（本地扫来的）或 `upload`（手机传上的）。
+  final String origin;
 
   bool get isVideo => mediaType == 'video';
 
@@ -89,6 +98,8 @@ class MediaItem {
       audioCodec: asStr('audio_codec'),
       thumbnailUrl: asStr('thumbnail_url'),
       originalUrl: asStr('original_url'),
+      filePath: asStr('file_path'),
+      origin: asStr('origin'),
     );
   }
 }

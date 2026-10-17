@@ -189,12 +189,27 @@ class ApiClient {
     return LibraryStats.fromJson(json);
   }
 
+  /// 拉一页媒体。
+  ///
+  /// [sort] 取值受后端白名单约束（`taken_at_desc`/`taken_at_asc`/`name_asc`/
+  /// `size_desc`/`size_asc`/`indexed_desc`），传别的值后端会静默回落默认，
+  /// 所以客户端只从自己那份枚举里选。
+  /// [from]/[to] 是 `YYYY-MM-DD`，按拍摄时间过滤。
+  ///
+  /// **`to` 必须传结束日期的次日，不能传当天。** 服务端是按字符串比较
+  /// RFC3339 的 `taken_at`：`"2026-10-17T12:00:00+08:00" <= "2026-10-17"`
+  /// 字典序不成立（同前缀越长越大），直接传当天会把结束那天的照片整批切掉。
+  /// 传次日则恰好含当天、不含次日晚于零点——且不依赖服务端时区。
+  /// [origin] 为 `scan`/`upload` 时只列对应来源。
   Future<MediaPage> listMedia({
     String? type,
     int page = 1,
     int pageSize = 60,
     String sort = 'taken_at_desc',
     String? query,
+    String? origin,
+    String? from,
+    String? to,
   }) async {
     final q = <String, String>{
       'page': '$page',
@@ -203,6 +218,9 @@ class ApiClient {
     };
     if (type != null && type.isNotEmpty) q['type'] = type;
     if (query != null && query.isNotEmpty) q['q'] = query;
+    if (origin != null && origin.isNotEmpty) q['origin'] = origin;
+    if (from != null && from.isNotEmpty) q['from'] = from;
+    if (to != null && to.isNotEmpty) q['to'] = to;
 
     final json = await _getJson('/api/media', query: q);
     return MediaPage.fromJson(json);
