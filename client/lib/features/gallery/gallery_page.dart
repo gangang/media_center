@@ -12,10 +12,17 @@ class GalleryPage extends StatefulWidget {
     super.key,
     required this.client,
     required this.onDisconnect,
+    this.revision = 0,
   });
 
   final ApiClient client;
   final Future<void> Function() onDisconnect;
+
+  /// 外部改动计数器。数值变化即表示「服务端可能多了内容，重新拉一次」。
+  ///
+  /// 本页常驻在 IndexedStack 里不会重建，手机上传完一批之后若不靠这个信号，
+  /// 用户切回图库看到的还是上传前的那一页。
+  final int revision;
 
   @override
   State<GalleryPage> createState() => _GalleryPageState();
@@ -39,6 +46,12 @@ class _GalleryPageState extends State<GalleryPage> {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant GalleryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.revision != oldWidget.revision) _refresh();
   }
 
   MediaPager _makePager(String type) => MediaPager(

@@ -174,8 +174,12 @@ flutter run -d macos              # 或 flutter run -d <android-device>
 
 分片上传 + 断点续传 + 内容去重。文件落在 `<数据目录>/library/<年>/<月>/`，以 `origin='upload'` 入库。
 
-客户端侧的上传引擎（哈希、分片、续传、重试、秒传、取消）已完成并有单元测试覆盖，
-但相册备份的界面入口尚未接入，目前通过下列接口使用。
+客户端侧的上传引擎（哈希、分片、续传、重试、秒传、取消）已完成并有单元测试覆盖。
+Android 客户端的「备份」页已经接入：申请相册权限 → 选片 → 排队上传，上传期间用前台服务保活，
+断网或切到后台都不会让任务半途而废。桌面端不显示这个入口——桌面上的文件本来就在磁盘里，
+直接放进扫描目录即可。
+
+接口本身也可直接调用：
 
 | 方法 | 路径 | 说明 |
 |:---|:---|:---|
@@ -265,6 +269,11 @@ flutter test integration_test/playback_test.dart -d macos \
   --dart-define=MC_TOKEN=<令牌>
 
 flutter test integration_test/album_test.dart -d macos \
+  --dart-define=MC_BASE_URL=http://127.0.0.1:18080 \
+  --dart-define=MC_TOKEN=<令牌>
+
+# 上传链路：客户端队列 + 真实 HTTP + 真实后端（不需要窗口）
+flutter test integration_test/upload_test.dart -d macos \
   --dart-define=MC_BASE_URL=http://127.0.0.1:18080 \
   --dart-define=MC_TOKEN=<令牌>
 

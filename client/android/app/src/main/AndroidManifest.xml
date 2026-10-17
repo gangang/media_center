@@ -6,6 +6,24 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
+    <!-- 相册备份要读手机里的照片和视频。
+         Android 13 (API 33) 起按媒体类型分权，旧的 READ_EXTERNAL_STORAGE
+         在新系统上不再生效，所以两个都要声明：新系统用前者，旧系统用后者。
+         maxSdkVersion=32 是为了不在 13+ 上申请一个已被忽略的权限 —— 那会让
+         应用商店和用户都看到一个"多余"的存储权限。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+
+    <!-- 上传期间用前台服务保活：安卓会在应用退到后台后限制进程，
+         一次几百张的备份不能因为用户切去回个消息就停住。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
     <application
         android:label="本地媒体中心"
         android:name="${applicationName}"
@@ -38,6 +56,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- 上传保活用的前台服务。名字由 flutter_foreground_task 固定，不能改；
+             dataSync 是 Android 14+ 强制要求的类型声明，没有它服务起不来。 -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

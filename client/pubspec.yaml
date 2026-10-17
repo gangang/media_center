@@ -35,9 +35,8 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
-  # 垂直切片阶段刻意只引入两个依赖：官方 http 客户端负责 API 调用，
-  # shared_preferences 负责保存服务器地址与访问令牌。
-  # dio / Riverpod / photo_view 解决的是规模化问题，等功能铺开再引入。
+  # 依赖按"确实需要"引入，不预先铺框架：dio / Riverpod / photo_view 这类
+  # 解决规模化问题的东西，等到规模真的到了再说。
   http: ^1.2.0
   shared_preferences: ^2.3.2
   media_kit: ^1.2.6
@@ -49,6 +48,11 @@ dependencies:
   # 这个包本来就被 http 间接带进来了，这里显式声明是因为我们要直接 import 它 ——
   # 依赖一个"碰巧存在"的传递依赖，会在上游改依赖树时突然断掉。
   crypto: ^3.0.7
+
+  # 相册备份（阶段五）：读系统相册 + 申请权限 + 上传期间用前台服务保活。
+  photo_manager: ^3.12.0
+  permission_handler: ^12.0.1
+  flutter_foreground_task: ^11.0.3
 
 dev_dependencies:
   flutter_test:
