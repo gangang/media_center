@@ -58,6 +58,8 @@ app.*.map.json
 # 这些是用户的实际媒体索引和缓存，和源代码无关，且会无界增长。
 data/
 **/data/
+.run-data/
+uploads/
 *.sqlite
 *.sqlite3
 *.db

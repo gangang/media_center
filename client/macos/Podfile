@@ -35,8 +35,39 @@ target 'Runner' do
   end
 end
 
+# media_kit 的 create_framework_symlinks.sh 是 CRLF 换行打包的，而它自己的 Makefile 里用
+# `sed -i '' 's/\r$//g'` 去 CR —— BSD sed 不把 \r 当转义，这条命令实际是空操作。
+# 于是脚本每行末尾带 \r，`set -e` 被解析成 `set $'-e\r'` 直接退出，
+# Frameworks/.symlinks/mpv/ 建出来但是空的，构建一路拖到链接阶段才失败：
+#   ld: framework 'Mpv' not found
+# 错误信息完全指不到原因。这里在 pod install 之后补一遍，幂等：已经正确就什么都不做。
+def repair_media_kit_symlinks
+  plugin = File.join(File.dirname(File.realpath(__FILE__)),
+                     'Flutter', 'ephemeral', '.symlinks', 'plugins',
+                     'media_kit_libs_macos_video', 'macos')
+  return unless File.directory?(plugin)
+
+  script = File.join(plugin, 'create_framework_symlinks.sh')
+  framework = File.join(plugin, 'Frameworks', 'Mpv.xcframework')
+  symlink = File.join(plugin, 'Frameworks', '.symlinks', 'mpv', 'macos', 'Mpv.framework')
+  return unless File.file?(script) && File.directory?(framework)
+  return if File.exist?(symlink)
+
+  # pub 缓存里的文件可能是只读的；改不动就安静跳过，不要让 pod install 失败。
+  begin
+    File.binwrite(script, File.binread(script).gsub("\r\n", "\n"))
+  rescue SystemCallError
+    return
+  end
+
+  FileUtils.mkdir_p(File.join(plugin, 'Frameworks', '.symlinks', 'mpv'))
+  system('sh', 'create_framework_symlinks.sh',
+         'Frameworks/Mpv.xcframework', 'Frameworks/.symlinks/mpv', chdir: plugin)
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
   end
+  repair_media_kit_symlinks
 end
