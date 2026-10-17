@@ -149,18 +149,30 @@ for t in "${TARGETS[@]}"; do
 done
 
 # ---------------------------------------------------------------- Android 包（可选）
-APK_SRC="$REPO/client/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
-if [ -f "$APK_SRC" ]; then
-  name="mediacenter-${VERSION}-android-arm64"
+# split-per-abi 产出三个包，全部打进去：arm64 覆盖绝大多数手机，armv7 给较老的
+# 32 位机型，x86_64 只用于模拟器。每个架构单独成包，用户只下自己需要的那个。
+APK_DIR="$REPO/client/build/app/outputs/flutter-apk"
+ANDROID_ABIS=("arm64-v8a:arm64" "armeabi-v7a:armv7" "x86_64:x86_64")
+android_found=0
+for entry in "${ANDROID_ABIS[@]}"; do
+  abi="${entry%%:*}"
+  tag="${entry##*:}"
+  src="$APK_DIR/app-${abi}-release.apk"
+  [ -f "$src" ] || continue
+
+  android_found=1
+  name="mediacenter-${VERSION}-android-${tag}"
   pkg="$OUT_DIR/$name"
   mkdir -p "$pkg"
-  cp "$APK_SRC" "$pkg/MediaCenter.apk"
+  cp "$src" "$pkg/MediaCenter.apk"
   cp "$PACKAGING/INSTALL.md" "$pkg/INSTALL.md"
   ( cd "$OUT_DIR" && zip -qr "$name.zip" "$name" )
   ARCHIVE_PATHS+=("$name.zip")
   printf '%-34s' "$name"
-  echo "$(du -h "$pkg/MediaCenter.apk" | cut -f1)  来自 $APK_SRC"
-else
+  echo "$(du -h "$pkg/MediaCenter.apk" | cut -f1)  来自 $(basename "$src")"
+done
+
+if [ "$android_found" = 0 ]; then
   echo
   echo "提示：没找到已构建的客户端 APK，跳过 android 包。"
   echo "      先跑 client/ 下的 flutter build apk --release --split-per-abi 再执行本脚本。"
