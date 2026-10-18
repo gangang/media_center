@@ -115,6 +115,8 @@ class _GalleryPageState extends State<GalleryPage> {
         items: _pager.items,
         index: index,
         onLoadMore: _loadMore,
+        // 查看器里删了/改名了，网格要跟着变，不然"删了还在"。
+        onChanged: _refresh,
       );
 
   /// 长按缩略图 → 文件操作面板（加入相册 / 重命名 / 移动）。

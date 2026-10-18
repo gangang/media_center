@@ -57,7 +57,7 @@ class MediaActionsSheet {
                   onTap: () async {
                     Navigator.pop(ctx);
                     final applied =
-                        await _rename(context, client: client, item: item);
+                        await rename(context, client: client, item: item);
                     if (applied != null) await onChanged();
                   },
                 ),
@@ -67,7 +67,7 @@ class MediaActionsSheet {
                   onTap: () async {
                     Navigator.pop(ctx);
                     final moved =
-                        await _move(context, client: client, item: item);
+                        await move(context, client: client, item: item);
                     if (moved) await onChanged();
                   },
                 ),
@@ -80,7 +80,7 @@ class MediaActionsSheet {
                   onTap: () async {
                     Navigator.pop(ctx);
                     final deleted =
-                        await _delete(context, client: client, item: item);
+                        await delete(context, client: client, item: item);
                     if (deleted) await onChanged();
                   },
                 ),
@@ -119,7 +119,7 @@ class MediaActionsSheet {
   ///
   /// 失败时不关闭对话框、把服务端的原话显示在里面——"扩展名不能改"这类提示
   /// 关掉对话框再弹个 SnackBar，用户早就忘了自己输的是什么。
-  static Future<String?> _rename(
+  static Future<String?> rename(
     BuildContext context, {
     required ApiClient client,
     required MediaItem item,
@@ -136,46 +136,84 @@ class MediaActionsSheet {
   }
 
   /// 删除单个文件。返回 true 表示调用方应该重拉列表。
-  ///
-  /// 确认框里**必须显示完整路径**：只显示文件名的话，用户分不清这是删
-  /// 手机传上来的副本，还是删 Mac 里 `~/Pictures` 下的原始文件。破坏性
-  /// 操作的确认信息要能独立回答"我到底在删什么"。
-  static Future<bool> _delete(
+  static Future<bool> delete(
     BuildContext context, {
     required ApiClient client,
     required MediaItem item,
   }) async {
+    return deleteMany(
+      context,
+      client: client,
+      items: [item],
+      // 单项也要显示完整路径：分不清删的是手机传上来的副本还是
+      // `~/Pictures` 下的原图，就等于让用户盲删。
+      confirmTitle: '删除这个文件？',
+    );
+  }
+
+  /// 批量删除。返回 true 表示至少删成了一个，调用方应该重拉列表。
+  ///
+  /// 和单项共用一条实现，因为服务端的部分失败语义两者完全一样：
+  /// 三个文件里有一个在只读盘上，就该是"两个成功、一个失败并说明原因"。
+  static Future<bool> deleteMany(
+    BuildContext context, {
+    required ApiClient client,
+    required List<MediaItem> items,
+    String confirmTitle = '删除这些文件？',
+  }) async {
+    if (items.isEmpty) return false;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => DeleteConfirmDialog(
-        title: '删除这个文件？',
-        fileName: item.fileName,
-        filePath: item.filePath,
+        title: confirmTitle,
+        fileName: items.length == 1 ? items.first.fileName : '共 ${items.length} 个文件',
+        filePath: items.length == 1 ? items.first.filePath : '',
+        body: items.length == 1
+            ? null
+            : items.map((i) => i.fileName).take(3).join('、') +
+                (items.length > 3 ? ' 等' : ''),
       ),
     );
     if (confirmed != true || !context.mounted) return false;
 
     try {
-      final outcome = await client.deleteMedia(item.id);
-      if (!context.mounted) return true;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(outcome.fileExisted == false
-              ? '已从媒体库移除（文件此前已不在磁盘上）'
-              : '已删除 ${item.fileName}'),
-        ),
-      );
-      return true;
-    } on ApiException catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('删除失败：${e.message}')));
+      // 一个文件走单项接口：响应里的 file_existed 能区分
+      // "文件本来就不在"和"真删掉了"，提示因此更准。
+      if (items.length == 1) {
+        final outcome = await client.deleteMedia(items.first.id);
+        if (!context.mounted) return true;
+        _toast(context, outcome.fileExisted == false
+            ? '已从媒体库移除（文件此前已不在磁盘上）'
+            : '已删除 ${items.first.fileName}');
+        return true;
       }
+
+      final result = await client.deleteMediaBatch(items.map((i) => i.id).toList());
+      if (!context.mounted) return result.deleted > 0;
+      if (result.failed == 0) {
+        _toast(context, '已删除 ${result.deleted} 个文件');
+      } else {
+        final why = result.results
+            .where((r) => !r.ok)
+            .map((r) => r.error)
+            .firstWhere((_) => true, orElse: () => '未知原因');
+        _toast(context, '删除 ${result.deleted} 个，${result.failed} 个失败：$why');
+      }
+      return result.deleted > 0;
+    } on ApiException catch (e) {
+      if (context.mounted) _toast(context, '删除失败：${e.message}');
       return false;
     }
   }
 
-  static Future<bool> _move(
+  static void _toast(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  static Future<bool> move(
     BuildContext context, {
     required ApiClient client,
     required MediaItem item,
@@ -267,6 +305,7 @@ class DeleteConfirmDialog extends StatelessWidget {
     required this.title,
     required this.fileName,
     required this.filePath,
+    this.body,
   });
 
   final String title;
@@ -274,6 +313,9 @@ class DeleteConfirmDialog extends StatelessWidget {
 
   /// 服务端返回的绝对路径；空字符串时只显示"路径未知"，不猜。
   final String filePath;
+
+  /// 批量删除时的摘要（前几个文件名），单项时为 null。
+  final String? body;
 
   @override
   Widget build(BuildContext context) {
@@ -293,6 +335,16 @@ class DeleteConfirmDialog extends StatelessWidget {
             filePath.isEmpty ? '路径未知' : filePath,
             style: TextStyle(fontSize: 12, color: theme.colorScheme.outline),
           ),
+          if (body != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              body!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 13, color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
           const SizedBox(height: 12),
           Text(
             '文件将从磁盘上删除，媒体库和相册里的记录一并移除，且无法恢复。',

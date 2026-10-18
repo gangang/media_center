@@ -152,6 +152,10 @@ curl -X POST http://localhost:8080/api/tokens \
 | GET | `/api/media/{id}` | 单个媒体的完整元数据 |
 | GET | `/api/media/{id}/thumbnail` | 缩略图（JPEG，最长边 320px，永久缓存） |
 | GET | `/api/media/{id}/original` | 原文件，支持 HTTP Range |
+| PATCH | `/api/media/{id}` | 改名或移动，**仅主令牌**，见下 |
+| DELETE | `/api/media/{id}` | 删除文件（索引 + 磁盘 + 缩略图），**仅主令牌**，见下 |
+| POST | `/api/media/move` | 批量移动，**仅主令牌** |
+| POST | `/api/media/delete` | 批量删除，**仅主令牌** |
 
 `/api/media` 查询参数：
 
@@ -165,6 +169,36 @@ curl -X POST http://localhost:8080/api/tokens \
 | `from` / `to` | — | 拍摄时间范围（RFC3339） |
 | `origin` | 全部 | `scan`（扫描入库）或 `upload`（手机备份上传） |
 
+列表项含 `file_path`（文件在服务端的绝对路径），对任何已认证设备可见——
+那些设备本来就能拉原图，目录结构是两者中较小的暴露面。列目录的
+`GET /api/fs/browse` 则仍然只给主令牌。
+
+#### 文件管理（改名 / 移动 / 删除）
+
+三者都要求**两层授权**：令牌是主令牌，且文件位于已注册的扫描目录之内。
+取消注册目录即收回其授权，文件仍在磁盘上、索引也还在。
+
+| 方法 | 路径 | 请求体 | 说明 |
+|:---|:---|:---|:---|
+| PATCH | `/api/media/{id}` | `{"name": "新名字.jpg"}` | 改名，扩展名不可改 |
+| PATCH | `/api/media/{id}` | `{"folder_id": 2}` | 移动到另一个已注册目录 |
+| POST | `/api/media/move` | `{"ids": [1,2], "folder_id": 2}` | 批量移动，单次上限 200 |
+| DELETE | `/api/media/{id}` | — | 删除单个文件 |
+| POST | `/api/media/delete` | `{"ids": [1,2,3]}` | 批量删除，单次上限 200 |
+
+几个必须知道的行为：
+
+- **改名是原地更新那一行索引**，媒体 `id` 不变，因此相册成员关系不会丢。
+  缩略图按内容哈希寻址，内容没变就不重制。
+- 目标目录已有同名文件时，服务端按 ` (1)`、` (2)` 自动追加序号，
+  响应里的 `applied_name` 是最终采用的名字，界面应以它为准。
+- 跨卷移动（内置盘 ↔ 外接盘）自动退回复制 + 校验 + 删源。
+- **删除是删磁盘文件**，不是只删索引——只删索引会被下次扫描当新文件复活。
+  文件已经不在时仍然删行，响应带 `file_existed: false`。
+  文件存在但删不掉（只读盘、权限）时返回 400，索引行保留。
+- 批量操作返回逐项明细，不整批回滚：
+  `{"deleted": 2, "failed": 1, "results": [{"id": 1, "ok": true}, {"id": 5, "ok": false, "error": "..."}]}`
+
 ### 目录与扫描
 
 | 方法 | 路径 | 说明 |
@@ -174,6 +208,19 @@ curl -X POST http://localhost:8080/api/tokens \
 | DELETE | `/api/folders/{id}` | 移除目录及其索引条目，不删除磁盘文件 |
 | POST | `/api/scan/start` | 手动触发扫描，可传 `{"folder_id": 1}` 限定目录 |
 | GET | `/api/scan/status` | 扫描进度 |
+| GET | `/api/fs/browse?path=` | 列服务端目录，**仅主令牌**，见下 |
+
+`GET /api/fs/browse` 供客户端做目录挑选器（手机不可能知道 Mac 的绝对路径）。
+只列直接子目录，不提供文件内容访问；它唯一天职是「注册为扫描目录」，
+浏览本身不构成授权。
+
+| 字段 | 说明 |
+|:---|:---|
+| `entries` | 子目录，按名称排序、隐藏目录排最后并置灰；不含符号链接目录 |
+| `parent` | 父目录（根目录时为 null） |
+| `home` | 服务端用户主目录 |
+| `shortcuts` | 服务端按平台算好的一键入口：主目录、图片目录、`/Volumes`、`/media`、Windows 盘符 |
+| `truncated` | 子目录超过 500 条时为 true，客户端应提示改用手动输入 |
 
 ### 相册
 

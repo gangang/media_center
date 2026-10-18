@@ -92,12 +92,16 @@ class MediaThumbnailTile extends StatelessWidget {
 ///
 /// [onLoadMore] 是必需的——查看器要靠它在滑到末尾时继续取下一页；
 /// 打开视频时用不到，但由调用方统一提供比按类型分叉简单。
+///
+/// [onChanged] 在查看器里改名/移动/删除成功后触发，让调用方重拉列表。
+/// 查看器自己持有的 items 是快照，不刷新就会出现"删了还在列表里"。
 Future<void> openMediaItem(
   BuildContext context, {
   required ApiClient client,
   required List<MediaItem> items,
   required int index,
   required Future<void> Function() onLoadMore,
+  Future<void> Function()? onChanged,
 }) async {
   if (index < 0 || index >= items.length) return;
   final item = items[index];
@@ -118,6 +122,7 @@ Future<void> openMediaItem(
         items: items,
         initialIndex: index,
         onLoadMore: onLoadMore,
+        onChanged: onChanged,
       ),
     ),
   );

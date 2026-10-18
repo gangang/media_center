@@ -4,6 +4,7 @@ import '../../core/api_client.dart';
 import '../../core/models.dart';
 import '../albums/album_picker_sheet.dart';
 import '../cinema/video_player_page.dart';
+import 'media_actions_sheet.dart';
 
 /// 全屏查看器：左右滑动切换，双指/滚轮缩放。
 ///
@@ -15,12 +16,17 @@ class MediaViewerPage extends StatefulWidget {
     required this.items,
     required this.initialIndex,
     required this.onLoadMore,
+    this.onChanged,
   });
 
   final ApiClient client;
   final List<MediaItem> items;
   final int initialIndex;
   final Future<void> Function() onLoadMore;
+
+  /// 改名/移动/删除发生后调用，让调用方重拉列表。查看器自己不知道外层
+  /// 用的是哪个分页器，所以只发信号不自己动。
+  final Future<void> Function()? onChanged;
 
   @override
   State<MediaViewerPage> createState() => _MediaViewerPageState();
@@ -108,6 +114,39 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     );
   }
 
+  /// ⋮ 菜单的三个动作全部复用图库操作面板那一套实现。
+  ///
+  /// 复制一份到查看器里会立刻分叉：改名对话框的扩展名锁死、删除确认框的
+  /// 完整路径显示，两处各改一半就会不一致。所以这里只做薄封装，把
+  /// "有变化"抛给外层——查看器自己持有的 items 是快照，不刷新就会出现
+  /// "删了还在列表里"。
+  Future<void> _onMenu(String value, MediaItem item) async {
+    bool changed = false;
+    if (value == 'rename') {
+      changed = await MediaActionsSheet.rename(
+            context,
+            client: widget.client,
+            item: item,
+          ) !=
+          null;
+    } else if (value == 'move') {
+      changed = await MediaActionsSheet.move(
+        context,
+        client: widget.client,
+        item: item,
+      );
+    } else if (value == 'delete') {
+      changed = await MediaActionsSheet.delete(
+        context,
+        client: widget.client,
+        item: item,
+      );
+    }
+    if (changed && widget.onChanged != null) {
+      await widget.onChanged!();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.items[_index.clamp(0, widget.items.length - 1)];
@@ -149,6 +188,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
                 onClose: () => Navigator.of(context).maybePop(),
                 onInfo: () => _showInfo(item),
                 onAddToAlbum: () => _addToAlbum(item),
+                onMenu: (value) => _onMenu(value, item),
               ),
             ],
           ],
@@ -267,6 +307,7 @@ class _TopBar extends StatelessWidget {
     required this.onClose,
     required this.onInfo,
     required this.onAddToAlbum,
+    required this.onMenu,
   });
 
   final int index;
@@ -275,6 +316,10 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onInfo;
   final VoidCallback onAddToAlbum;
+
+  /// ⋮ 菜单的动作标识（rename/move/delete）。顶栏自己不知道 ApiClient，
+  /// 收菜单的活不干，只把选择抛给上层 State。
+  final ValueSetter<String> onMenu;
 
   @override
   Widget build(BuildContext context) {
@@ -329,6 +374,46 @@ class _TopBar extends StatelessWidget {
                   onPressed: onAddToAlbum,
                   icon: const Icon(Icons.photo_album_outlined,
                       color: Colors.white),
+                ),
+                // "正在看这张"是最自然的整理场景，但顶栏放不下四个操作，
+                // 所以收进 ⋮。三个界面里只有图库网格原来能改能删。
+                PopupMenuButton<String>(
+                  tooltip: '更多操作',
+                  icon: const Icon(Icons.more_vert, color: Colors.white),
+                  color: const Color(0xFF2C2C2E),
+                  onSelected: onMenu,
+                  itemBuilder: (_) => const [
+                    PopupMenuItem<String>(
+                      value: 'rename',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.drive_file_rename_outline,
+                            color: Colors.white70),
+                        title: Text('重命名',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'move',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.drive_folder_upload_outlined,
+                            color: Colors.white70),
+                        title: Text('移动到…',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.delete_outline,
+                            color: Colors.redAccent),
+                        title: Text('删除',
+                            style: TextStyle(color: Colors.redAccent)),
+                      ),
+                    ),
+                  ],
                 ),
                 IconButton(
                   onPressed: onInfo,

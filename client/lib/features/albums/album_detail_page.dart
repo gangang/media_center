@@ -4,6 +4,7 @@ import '../../core/api_client.dart';
 import '../../core/media_pager.dart';
 import '../../core/models.dart';
 import '../../widgets/media_grid.dart';
+import '../gallery/media_actions_sheet.dart';
 
 /// 相册详情：网格展示相册内容，支持多选移出。
 ///
@@ -117,6 +118,11 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
       items: _pager.items,
       index: index,
       onLoadMore: _loadMore,
+      // 查看器里删掉的文件会因外键级联离开相册，必须重拉才知道。
+      onChanged: () async {
+        await _refresh();
+        await _reloadAlbum();
+      },
     );
   }
 
@@ -145,6 +151,30 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
     }
   }
 
+  /// 删除选中的文件（不是移出相册，是真的删磁盘）。
+  ///
+  /// 复用操作面板那条实现，因为服务端的部分失败语义完全一样；确认框也
+  /// 因此带上"媒体库和相册里的记录一并移除"——外键级联下这一点必须说，
+  /// 否则用户以为只影响当前相册。
+  Future<void> _deleteSelected() async {
+    final ids = _selected.toSet();
+    if (ids.isEmpty || _busy) return;
+    final items =
+        _pager.items.where((m) => ids.contains(m.id)).toList(growable: false);
+    if (items.isEmpty) return;
+
+    final deleted = await MediaActionsSheet.deleteMany(
+      context,
+      client: widget.client,
+      items: items,
+      confirmTitle: '删除这 ${items.length} 个文件？',
+    );
+    if (!mounted || !deleted) return;
+    _exitSelection();
+    await _refresh();
+    await _reloadAlbum();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -164,6 +194,15 @@ class _AlbumDetailPageState extends State<AlbumDetailPage> {
                   onPressed:
                       _selected.isEmpty || _busy ? null : _removeSelected,
                   icon: const Icon(Icons.playlist_remove),
+                ),
+                // 删除就在"移出相册"旁边：长按多选后用户预期的是这个动作，
+                // 只给"移出"会让人以为app删不了东西。红色区分破坏性。
+                IconButton(
+                  tooltip: '删除文件',
+                  onPressed:
+                      _selected.isEmpty || _busy ? null : _deleteSelected,
+                  icon: Icon(Icons.delete_outline,
+                      color: theme.colorScheme.error),
                 ),
               ],
             )
